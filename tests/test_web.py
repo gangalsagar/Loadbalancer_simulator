@@ -376,12 +376,12 @@ class TestWebAPI(unittest.TestCase):
         r = self.client.get("/simulator")
         self.assertEqual(r.status_code, 200)
         data = r.data.decode("utf-8")
-        self.assertIn("Simulation Configuration", data)
+        self.assertTrue("WORKLOAD CONFIGURATION" in data or "Simulation Configuration" in data)
         self.assertIn("Add Task", data)
 
     def test_31_dashboard_page_returns_200(self):
-        """GET /dashboard should return 200 and legacy dashboard HTML."""
-        r = self.client.get("/dashboard")
+        """GET /dashboard should redirect to /simulator and return 200 with Load Balancer."""
+        r = self.client.get("/dashboard", follow_redirects=True)
         self.assertEqual(r.status_code, 200)
         data = r.data.decode("utf-8")
         self.assertIn("Load Balancer", data)

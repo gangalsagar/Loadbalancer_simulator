@@ -4,15 +4,17 @@ main.py - Interactive CLI interface for Python Load Balancer (Phase 3).
 Provides an interactive menu for:
 1. Submitting individual tasks
 2. Submitting batch tasks
-3. Inspecting worker states, workloads, and failure statistics
+3. Inspecting worker states, execution threads, queues, workloads, and failure statistics
 4. Inspecting individual task details (including interruption and re-routing history)
 5. Viewing all submitted tasks
-6. Changing the active scheduling algorithm (Round Robin / Least Connections)
-7. Viewing operational metrics and running head-to-head comparison benchmarks
+6. Switching the active scheduling algorithm (Round Robin / Least Connections)
+7. Viewing operational metrics
 8. Simulating worker failure (with active task interruption and queued task re-routing)
 9. Recovering a failed worker
 10. Viewing failed workers
-11. Performing clean shutdown
+11. Resetting simulation and LoadBalancer completely
+12. Running head-to-head algorithm comparison benchmark
+13. Performing clean shutdown
 """
 
 import argparse
@@ -120,17 +122,29 @@ def handle_submit_multiple(lb: LoadBalancer) -> None:
 
 
 def handle_worker_status(lb: LoadBalancer) -> None:
-    """Display real-time state, workload, and failure statistics of all workers."""
+    """Display real-time state, workload, thread state, queue contents, and failure statistics of all workers."""
     print_header("WORKER STATUS")
     statuses = lb.get_worker_status()
+    queues = lb.get_worker_queues()
     for ws in statuses:
         avail_str = "YES" if ws.get("available", True) else "NO"
+        th_alive_str = "ALIVE" if ws.get("thread_alive") else "DEAD"
+        th_state_str = ws.get("thread_state", "UNKNOWN")
         print(f"\n{ws['worker_id']}")
         print(f"State: {ws['status']}")
         print(f"Available: {avail_str}")
+        print(f"Execution Thread: {th_alive_str} ({th_state_str})")
         current = ws["current_task_id"]
-        print(f"Current Task: {current if current else 'None'}")
+        current_name = ws.get("current_task_name")
+        curr_str = f"{current} - {current_name}" if current else "None"
+        print(f"Current Task: {curr_str}")
         print(f"Queued Tasks: {ws['queue_size']}")
+        q_items = queues.get(ws["worker_id"], [])
+        if q_items:
+            q_str = ", ".join(f"[{item['task_id']}: {item['name']} ({item['duration']}s)]" for item in q_items)
+            print(f"Queue Contents: {q_str}")
+        else:
+            print("Queue Contents: (Empty)")
         print(f"Current Workload: {ws['workload']}")
         print(f"Completed: {ws['completed']} | Failed: {ws['failed']} | Interrupted: {ws.get('interrupted', 0)}")
         print(f"Failures: {ws.get('failures', 0)} | Recoveries: {ws.get('recoveries', 0)}")
@@ -238,9 +252,9 @@ def handle_change_algorithm(lb: LoadBalancer) -> None:
         print("\n[!] Algorithm change cancelled.")
 
 
-def handle_metrics_and_comparison(lb: LoadBalancer) -> None:
-    """Display operational metrics and provide option to run controlled comparison."""
-    print_header("SYSTEM METRICS & ALGORITHM EVALUATION")
+def handle_metrics(lb: LoadBalancer) -> None:
+    """Display operational metrics."""
+    print_header("SYSTEM METRICS")
     m = lb.get_metrics()
     print(f"Active Algorithm:       {m['scheduler_name']}")
     print(f"Total Tasks Submitted:  {m['total_submitted']}")
@@ -263,15 +277,28 @@ def handle_metrics_and_comparison(lb: LoadBalancer) -> None:
               f"Workload: {ws['workload']:<3} Completed: {ws['completed']:<3} Failures: {ws.get('failures', 0)}")
     print("=" * 40)
 
+
+def handle_reset_simulation(lb: LoadBalancer) -> None:
+    """Safely reset the load balancer and worker state."""
+    print_header("RESET SIMULATION")
     try:
-        run_comp = input("\nRun head-to-head algorithm comparison benchmark? (y/n, default n): ").strip().lower()
-        if run_comp in ("y", "yes"):
-            print("\nRunning controlled comparison benchmark (Round Robin vs Least Connections)...")
-            print("Executing identical workloads across both algorithms...")
-            rr_res, lc_res = compare_algorithms(worker_count=len(lb.workers))
-            print("\n" + format_comparison_table(rr_res, lc_res))
+        confirm = input("Are you sure you want to completely reset the simulator? (y/n, default n): ").strip().lower()
+        if confirm in ("y", "yes"):
+            lb.reset()
+            print("\n[OK] Simulator completely reset: tasks cleared, IDs restart at T001, workers in IDLE, metrics zeroed.")
+        else:
+            print("\nReset cancelled.")
     except (KeyboardInterrupt, EOFError):
-        pass
+        print("\nReset cancelled.")
+
+
+def handle_algorithm_comparison(lb: LoadBalancer) -> None:
+    """Run controlled head-to-head algorithm comparison benchmark."""
+    print_header("ALGORITHM COMPARISON BENCHMARK")
+    print("Running controlled comparison benchmark (Round Robin vs Least Connections)...")
+    print("Executing identical workloads across clean independent instances...")
+    rr_res, lc_res = compare_algorithms(worker_count=len(lb.workers))
+    print("\n" + format_comparison_table(rr_res, lc_res))
 
 
 def handle_simulate_failure(lb: LoadBalancer) -> None:
@@ -541,12 +568,14 @@ def main() -> None:
             print("3. View Worker Status")
             print("4. View Task Status")
             print("5. View All Tasks")
-            print("6. Change Scheduling Algorithm")
-            print("7. View Metrics & Compare Algorithms")
+            print("6. Switch Scheduler")
+            print("7. View Metrics")
             print("8. Simulate Worker Failure")
             print("9. Recover Worker")
             print("10. View Failed Workers")
-            print("11. Exit")
+            print("11. Reset Simulation")
+            print("12. Algorithm Comparison")
+            print("13. Exit")
             print("========================================")
 
             try:
@@ -568,7 +597,7 @@ def main() -> None:
             elif choice == "6":
                 handle_change_algorithm(lb)
             elif choice == "7":
-                handle_metrics_and_comparison(lb)
+                handle_metrics(lb)
             elif choice == "8":
                 handle_simulate_failure(lb)
             elif choice == "9":
@@ -576,10 +605,14 @@ def main() -> None:
             elif choice == "10":
                 handle_view_failed_workers(lb)
             elif choice == "11":
+                handle_reset_simulation(lb)
+            elif choice == "12":
+                handle_algorithm_comparison(lb)
+            elif choice == "13":
                 print("\nInitiating graceful shutdown of backend workers...")
                 break
             else:
-                print("\n[!] Invalid choice. Please enter a number between 1 and 11.")
+                print("\n[!] Invalid choice. Please enter a number between 1 and 13.")
     finally:
         lb.shutdown()
         print("[OK] All backend worker threads stopped cleanly.")

@@ -54,7 +54,6 @@
             </div>
             <div class="sidebar-actions">
                 <button id="btn-run-simulation" class="btn btn-primary btn-block" onclick="runSimulation()">Run Simulation</button>
-                <button class="btn btn-secondary btn-block" onclick="loadSampleTasks()">Load Sample</button>
                 <button class="btn btn-secondary btn-block" onclick="resetSimulation()">Reset</button>
             </div>
         </div>
@@ -76,8 +75,7 @@
             <h2 class="section-title">WORKLOAD CONFIGURATION</h2>
 
             <div class="config-toolbar">
-                <span class="config-preset">Preset: Default Sample (5 Tasks)</span>
-                <button class="btn btn-secondary btn-sm" onclick="loadSampleTasks()">+ Add Task</button>
+                <span class="config-preset">One-by-One Task Entry (Tasks are queued and submitted when you click Run Simulation)</span>
                 <button class="btn btn-secondary btn-sm" onclick="resetSimulation()">Reset</button>
             </div>
 
@@ -89,13 +87,44 @@
                     </div>
                     <div class="form-field">
                         <label class="form-label">Duration (seconds)</label>
-                        <input type="number" id="task-duration" class="form-input" placeholder="8" min="0.05" max="30" step="0.1" value="8" />
-                    </div>
-                    <div class="form-field">
-                        <label class="form-label">Arrival Time (seconds)</label>
-                        <input type="number" id="task-arrival" class="form-input" placeholder="0" min="0" max="60" step="0.5" value="0" />
+                        <input type="number" id="task-duration" class="form-input" placeholder="5" min="0.05" max="30" step="0.1" value="5" />
                     </div>
                     <button class="btn btn-primary" onclick="addPreparedTask()">Add Task</button>
+                </div>
+            </div>
+
+            <!-- LOAD TASKS PANEL -->
+            <div class="load-tasks-panel">
+                <div class="load-tasks-header">
+                    <span class="load-tasks-title">⚡ Quick Load</span>
+                    <span class="load-tasks-desc">Auto-add 10 tasks with random durations (10–20 s each) to stress-test the load balancer</span>
+                </div>
+                <div class="load-tasks-controls">
+                    <div class="load-tasks-count-group">
+                        <label class="form-label" for="load-task-count">Number of tasks</label>
+                        <input type="number" id="load-task-count" class="form-input form-input-sm" min="1" max="20" value="10" />
+                    </div>
+                    <div class="load-tasks-count-group">
+                        <label class="form-label" for="load-min-dur">Min duration (s)</label>
+                        <input type="number" id="load-min-dur" class="form-input form-input-sm" min="1" max="29" step="1" value="10" />
+                    </div>
+                    <div class="load-tasks-count-group">
+                        <label class="form-label" for="load-max-dur">Max duration (s)</label>
+                        <input type="number" id="load-max-dur" class="form-input form-input-sm" min="2" max="30" step="1" value="20" />
+                    </div>
+                    <div class="load-tasks-count-group">
+                        <label class="form-label" for="load-name-prefix">Name prefix</label>
+                        <input type="text" id="load-name-prefix" class="form-input form-input-sm" value="Task" placeholder="Task" maxlength="20" />
+                    </div>
+                    <button id="btn-load-tasks" class="btn btn-accent" onclick="loadBulkTasks()">
+                        Load Tasks
+                    </button>
+                </div>
+                <div id="load-tasks-progress" class="load-tasks-progress" style="display:none;">
+                    <div class="load-tasks-bar-wrap">
+                        <div class="load-tasks-bar" id="load-tasks-bar"></div>
+                    </div>
+                    <span id="load-tasks-progress-text" class="load-tasks-progress-text">Adding tasks…</span>
                 </div>
             </div>
 
@@ -104,17 +133,16 @@
                     <table class="task-table" id="prepared-table">
                         <thead>
                             <tr>
-                                <th>Task ID</th>
+                                <th>Task</th>
                                 <th>Task Name</th>
-                                <th>Duration (s)</th>
-                                <th>Arrival (s)</th>
+                                <th>Duration</th>
                                 <th>Status</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
                         <tbody id="prepared-tbody">
                             <tr>
-                                <td colspan="5" class="empty-row">No tasks prepared yet.</td>
+                                <td colspan="5" class="empty-row">No tasks prepared yet. Enter a task above and click "Add Task".</td>
                             </tr>
                         </tbody>
                     </table>
@@ -126,6 +154,24 @@
         <section id="live-simulation" class="section" style="display: none;">
             <h2 class="section-title">LIVE SIMULATION</h2>
 
+            <!-- ARCHITECTURE FLOW -->
+            <div class="arch-flow-panel">
+                <div class="arch-flow-step">
+                    <span class="arch-flow-tag">LOAD BALANCER</span>
+                    <span class="arch-flow-sub">Single Ingestion Coordinator</span>
+                </div>
+                <div class="arch-flow-arrow">➔</div>
+                <div class="arch-flow-step">
+                    <span class="arch-flow-tag" id="arch-active-scheduler">SCHEDULER</span>
+                    <span class="arch-flow-sub">Fault-Tolerant Dispatch</span>
+                </div>
+                <div class="arch-flow-arrow">➔</div>
+                <div class="arch-flow-step">
+                    <span class="arch-flow-tag">3 CONCURRENT WORKERS</span>
+                    <span class="arch-flow-sub">1 Dedicated Thread + 1 Isolated FIFO Queue Each</span>
+                </div>
+            </div>
+
             <!-- PERFORMANCE SUMMARY -->
             <div class="performance-summary">
                 <div class="perf-item">
@@ -134,22 +180,22 @@
                 </div>
                 <div class="perf-item">
                     <span class="perf-label">AVERAGE WAITING TIME</span>
-                    <span class="perf-value" id="perf-avg-wait">0.00 units</span>
+                    <span class="perf-value" id="perf-avg-wait">0.00 s</span>
                 </div>
                 <div class="perf-item">
                     <span class="perf-label">AVERAGE EXECUTION TIME</span>
-                    <span class="perf-value" id="perf-avg-exec">0.00 units</span>
+                    <span class="perf-value" id="perf-avg-exec">0.00 s</span>
                 </div>
                 <div class="perf-item">
                     <span class="perf-label">TOTAL EXECUTION TIME</span>
-                    <span class="perf-value" id="perf-total-exec">0.00 units</span>
+                    <span class="perf-value" id="perf-total-exec">0.00 s</span>
                 </div>
             </div>
 
             <!-- WORKER VISUALIZATION -->
-            <h3 class="section-subtitle-small">WORKER STATES</h3>
+            <h3 class="section-subtitle-small">CONCURRENT WORKER THREADS & ISOLATED QUEUES</h3>
             <div class="workers-grid" id="workers-grid">
-                <!-- Populated by JavaScript -->
+                <!-- Populated dynamically by JavaScript -->
             </div>
 
             <!-- EXECUTION TIMELINE -->
@@ -170,7 +216,6 @@
                                 <th>Task ID</th>
                                 <th>Task Name</th>
                                 <th>Duration</th>
-                                <th>Arrival</th>
                                 <th>Worker</th>
                                 <th>Status</th>
                                 <th>Waiting Time</th>
@@ -179,7 +224,7 @@
                         </thead>
                         <tbody id="task-tbody">
                             <tr>
-                                <td colspan="8" class="empty-row">No tasks submitted yet.</td>
+                                <td colspan="7" class="empty-row">No tasks submitted yet.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -190,6 +235,18 @@
             <div id="simulation-complete" class="simulation-complete" style="display: none;">
                 <h3 class="complete-title">SIMULATION COMPLETE</h3>
                 <button class="btn btn-primary btn-large" onclick="resetSimulation()">Run New Simulation</button>
+            </div>
+        </section>
+
+        <!-- ALGORITHM COMPARISON BENCHMARK -->
+        <section id="algorithms" class="section">
+            <h2 class="section-title">ALGORITHM COMPARISON BENCHMARK</h2>
+            <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                Run an empirical head-to-head performance benchmark comparing <b>Round Robin</b> against <b>Least Connections</b> under identical workloads on clean, independent load balancer instances.
+            </p>
+            <button class="btn btn-primary" id="btn-run-comparison" onclick="runAlgorithmComparison()">Run Benchmark Comparison</button>
+            <div id="comparison-results" style="display: none; margin-top: 1.5rem;">
+                <!-- Populated dynamically by JavaScript -->
             </div>
         </section>
 

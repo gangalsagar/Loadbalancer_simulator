@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from scheduler import BaseScheduler, RoundRobinScheduler, create_scheduler
 from server import Worker, WorkerStatus
-from task import Task, TaskStatus
+from task import Task, TaskStatus, reset_task_id_generator
 
 
 def setup_logger(name: str = "LoadBalancer", level: int = logging.INFO) -> logging.Logger:
@@ -499,3 +499,32 @@ class LoadBalancer:
         self._is_shutdown = True
         for worker in self.workers:
             worker.stop(wait=wait, timeout=timeout)
+
+    def reset(self) -> None:
+        """
+        Safely and completely reset the load balancer to an initial clean state.
+
+        Resets:
+        - Task registry and backlog
+        - Sequential task ID generator (starts back at T001)
+        - Global metrics, counters, and start timestamp
+        - Scheduler state (resets pointer)
+        - All backend workers (queues drained, counters zeroed, healthy IDLE threads restarted)
+        """
+        with self._lock:
+            self._is_shutdown = False
+            self._tasks.clear()
+            self._backlogged_tasks.clear()
+            self.total_worker_failures = 0
+            self.total_worker_recoveries = 0
+            self.total_re_routed = 0
+            self._start_time = time.time()
+            self.scheduler.reset()
+
+        reset_task_id_generator(1)
+
+        for worker in self.workers:
+            worker.reset()
+
+        if self.logger:
+            self.logger.info("LoadBalancer has been completely reset.")

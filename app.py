@@ -16,7 +16,7 @@ import os
 import sys
 import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path so imports work when running directly
@@ -24,6 +24,7 @@ from flask import Flask, jsonify, render_template, request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from load_balancer import LoadBalancer  # noqa: E402
+from comparison import compare_algorithms  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Flask application
@@ -101,8 +102,8 @@ def simulator():
 
 @app.route("/dashboard")
 def dashboard():
-    """Serve the legacy dashboard (Phase 4 original)."""
-    return render_template("index.html")
+    """Redirect legacy dashboard route to simulator workspace."""
+    return redirect("/simulator", code=302)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +158,7 @@ def api_workers_failed():
 
 
 @app.route("/api/workers/<worker_id>/fail", methods=["POST"])
+@app.route("/api/worker/<worker_id>/fail", methods=["POST"])
 def api_worker_fail(worker_id):
     """Simulate an unexpected failure of the specified worker."""
     try:
@@ -173,6 +175,7 @@ def api_worker_fail(worker_id):
 
 
 @app.route("/api/workers/<worker_id>/recover", methods=["POST"])
+@app.route("/api/worker/<worker_id>/recover", methods=["POST"])
 def api_worker_recover(worker_id):
     """Recover a previously failed worker."""
     try:
@@ -357,6 +360,7 @@ def api_set_algorithm():
 
 
 @app.route("/api/simulation/prepared", methods=["POST"])
+@app.route("/api/simulation/prepared-tasks", methods=["POST"])
 def api_add_prepared_task():
     """
     Add a task to the prepared task list (does not execute yet).
@@ -390,49 +394,79 @@ def api_add_prepared_task():
     except (TypeError, ValueError):
         return jsonify({"error": "arrival_time must be a number"}), 400
 
-    _simulation_state["prepared_tasks"].append({
-        "name": name,
+    task_idx = len(_simulation_state["prepared_tasks"]) + 1
+    task_entry = {
+        "index": task_idx - 1,
+        "prep_id": f"P{task_idx:03d}",
+        "label": f"Prepared Task {task_idx}",
+        "name": str(name),
         "duration": duration,
         "arrival_time": arrival_offset,
         "status": "READY",
-    })
+    }
+    _simulation_state["prepared_tasks"].append(task_entry)
 
     return jsonify({
         "message": "Task added to prepared list",
+        "task": task_entry,
         "prepared_count": len(_simulation_state["prepared_tasks"]),
     })
 
 
 @app.route("/api/simulation/prepared", methods=["GET"])
+@app.route("/api/simulation/prepared-tasks", methods=["GET"])
 def api_get_prepared_tasks():
-    """Return the list of prepared tasks."""
+    """Return the authoritative list of prepared tasks."""
     return jsonify({
         "tasks": _simulation_state["prepared_tasks"],
         "count": len(_simulation_state["prepared_tasks"]),
     })
 
 
-@app.route("/api/simulation/prepared/<int:index>", methods=["DELETE"])
-def api_remove_prepared_task(index):
-    """Remove a prepared task by index."""
-    if 0 <= index < len(_simulation_state["prepared_tasks"]):
-        _simulation_state["prepared_tasks"].pop(index)
+@app.route("/api/simulation/prepared/<task_id>", methods=["DELETE"])
+@app.route("/api/simulation/prepared-tasks/<task_id>", methods=["DELETE"])
+def api_remove_prepared_task(task_id):
+    """Remove a prepared task by index or prep_id."""
+    target_idx = None
+    if str(task_id).isdigit():
+        idx = int(task_id)
+        if 0 <= idx < len(_simulation_state["prepared_tasks"]):
+            target_idx = idx
+
+    if target_idx is None:
+        for i, t in enumerate(_simulation_state["prepared_tasks"]):
+            if (
+                str(t.get("prep_id", "")).lower() == str(task_id).lower()
+                or str(t.get("id", "")).lower() == str(task_id).lower()
+                or str(t.get("name", "")).lower() == str(task_id).lower()
+            ):
+                target_idx = i
+                break
+
+    if target_idx is not None:
+        _simulation_state["prepared_tasks"].pop(target_idx)
+        # Re-index remaining tasks
+        for i, t in enumerate(_simulation_state["prepared_tasks"]):
+            t["index"] = i
+            t["prep_id"] = f"P{i + 1:03d}"
+            t["label"] = f"Prepared Task {i + 1}"
         return jsonify({
             "message": "Task removed",
             "prepared_count": len(_simulation_state["prepared_tasks"]),
         })
-    return jsonify({"error": "Invalid index"}), 400
+    return jsonify({"error": "Invalid index or task ID"}), 400
 
 
 @app.route("/api/simulation/start", methods=["POST"])
 def api_start_simulation():
     """
     Start the simulation by submitting all prepared tasks to the LoadBalancer.
-
+    Consumes the prepared tasks exactly ONCE.
     Requires at least one prepared task.
     """
-    if _simulation_state["running"]:
-        return jsonify({"error": "Simulation is already running"}), 400
+    m = lb.get_metrics()
+    if (m["total_running"] + m["total_queued"]) > 0:
+        return jsonify({"error": "Simulation is already running with active tasks. Please wait for completion or click Reset."}), 400
 
     if not _simulation_state["prepared_tasks"]:
         return jsonify({"error": "No prepared tasks to submit"}), 400
@@ -440,10 +474,13 @@ def api_start_simulation():
     _simulation_state["running"] = True
     _simulation_state["simulation_start_time"] = time.time()
 
-    # Submit all prepared tasks
+    # Atomically take all prepared tasks so they cannot be double-submitted
+    tasks_to_submit = list(_simulation_state["prepared_tasks"])
+    _simulation_state["prepared_tasks"] = []
+
     submitted = []
     base_time = time.time()
-    for task_data in _simulation_state["prepared_tasks"]:
+    for task_data in tasks_to_submit:
         try:
             arrival_time = base_time + task_data.get("arrival_time", 0)
             task = lb.create_and_submit_task(
@@ -455,7 +492,7 @@ def api_start_simulation():
             submitted.append(task.task_id)
         except RuntimeError as exc:
             _simulation_state["running"] = False
-            return jsonify({"error": str(exc)}), 503
+            return jsonify({"error": str(exc), "submitted_so_far": submitted}), 503
 
     return jsonify({
         "message": f"Simulation started with {len(submitted)} tasks",
@@ -465,9 +502,20 @@ def api_start_simulation():
 
 @app.route("/api/simulation/status", methods=["GET"])
 def api_simulation_status():
-    """Return the current simulation status."""
+    """Return the current simulation status dynamically evaluated from backend."""
+    m = lb.get_metrics()
+    active_count = m["total_running"] + m["total_queued"]
+    # If all tasks finished processing, clear the running flag
+    if _simulation_state["running"] and active_count == 0 and m["total_submitted"] > 0:
+        _simulation_state["running"] = False
+
+    is_running = active_count > 0 or _simulation_state["running"]
+
     return jsonify({
-        "running": _simulation_state["running"],
+        "running": is_running,
+        "active_tasks": active_count,
+        "total_submitted": m["total_submitted"],
+        "total_completed": m["total_completed"],
         "prepared_count": len(_simulation_state["prepared_tasks"]),
         "elapsed_time": (
             time.time() - _simulation_state["simulation_start_time"]
@@ -480,16 +528,47 @@ def api_simulation_status():
 @app.route("/api/simulation/reset", methods=["POST"])
 def api_reset_simulation():
     """
-    Reset the simulation state.
-    Clears prepared tasks and allows new simulation setup.
+    Reset both the simulation state and the LoadBalancer backend completely.
+    Clears prepared tasks, resets workers, drains queues, zeros metrics, and resets task IDs.
     """
     _simulation_state["running"] = False
     _simulation_state["prepared_tasks"] = []
     _simulation_state["simulation_start_time"] = None
 
+    # Fully reset the LoadBalancer backend
+    lb.reset()
+
     return jsonify({
-        "message": "Simulation reset",
+        "message": "Simulation and LoadBalancer reset",
         "prepared_count": 0,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Routes: Algorithm Comparison (Phase 2 & Benchmark)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/comparison", methods=["GET", "POST"])
+@app.route("/api/compare", methods=["GET", "POST"])
+def api_comparison():
+    """
+    Execute controlled algorithm comparison between Round Robin and Least Connections.
+    Runs on clean independent LoadBalancer instances with identical workloads.
+    """
+    data = request.get_json(silent=True) or {}
+    durations = data.get("durations")
+    if durations and isinstance(durations, list):
+        try:
+            durations = [float(d) for d in durations if float(d) > 0]
+        except (ValueError, TypeError):
+            durations = None
+    else:
+        durations = None
+
+    rr_res, lc_res = compare_algorithms(worker_count=len(lb.workers), durations=durations)
+    return jsonify({
+        "round_robin": rr_res,
+        "least_connections": lc_res,
     })
 
 

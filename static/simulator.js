@@ -2,15 +2,15 @@
  * simulator.js - Simulator workspace logic for Distributed Load Balancer
  *
  * Responsibilities:
- *   - Task preparation (add/remove tasks without executing)
- *   - Start simulation (submit prepared tasks to LoadBalancer)
- *   - Poll backend for worker states, queues, and task status
- *   - Update worker visualization with thread state and queue contents
- *   - Update task monitor table
- *   - Update metrics
- *   - Handle worker failure and recovery
+ *   - Task preparation (add/remove tasks through authoritative backend API)
+ *   - Start simulation (trigger backend /api/simulation/start exactly ONCE)
+ *   - Poll backend for worker states, thread states, queues, and task status
+ *   - Update worker visualization with dedicated thread and isolated FIFO queue
+ *   - Update task monitor table with backend-generated task IDs
+ *   - Update metrics with proper units
+ *   - Handle real worker failure and recovery via backend APIs
  *   - Detect simulation completion
- *   - Reset simulation for new run
+ *   - Reset simulation and LoadBalancer completely
  *
  * No frameworks — plain fetch() + setInterval() + DOM manipulation.
  */
@@ -24,7 +24,6 @@
 var preparedTasks = [];
 var simulationRunning = false;
 var pollingInterval = null;
-var taskCounter = 1;
 
 /* ==========================================================================
    Boot
@@ -34,7 +33,69 @@ document.addEventListener("DOMContentLoaded", function () {
     loadPreparedTasks();
     syncAlgorithmDropdown();
     checkUrlParams();
+    initSimulationState();
+
+    var nameInput = document.getElementById("task-name");
+    var durInput = document.getElementById("task-duration");
+    if (nameInput) {
+        nameInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                addPreparedTask();
+            }
+        });
+    }
+    if (durInput) {
+        durInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                addPreparedTask();
+            }
+        });
+    }
 });
+
+function initSimulationState() {
+    fetch("/api/simulation/status")
+        .then(function (r) { return r.json(); })
+        .then(function (sim) {
+            if (sim.running || sim.total_submitted > 0) {
+                var liveSec = document.getElementById("live-simulation");
+                if (liveSec) {
+                    liveSec.style.display = "block";
+                }
+                if (sim.running) {
+                    simulationRunning = true;
+                    var st = document.getElementById("sim-status");
+                    if (st) {
+                        st.textContent = "RUNNING";
+                        st.className = "sidebar-status status-running";
+                    }
+                    var nameInput = document.getElementById("task-name");
+                    var durInput = document.getElementById("task-duration");
+                    var btn = document.querySelector(".task-entry-form button");
+                    var btnRun = document.getElementById("btn-run-simulation");
+                    if (nameInput) nameInput.disabled = true;
+                    if (durInput) durInput.disabled = true;
+                    if (btn) btn.disabled = true;
+                    if (btnRun) btnRun.disabled = true;
+                    startPolling();
+                } else if (sim.total_submitted > 0) {
+                    var st = document.getElementById("sim-status");
+                    if (st) {
+                        st.textContent = "COMPLETE";
+                        st.className = "sidebar-status status-complete";
+                    }
+                    var comp = document.getElementById("simulation-complete");
+                    if (comp) {
+                        comp.style.display = "block";
+                    }
+                }
+                refreshSimulation();
+            }
+        })
+        .catch(function () {});
+}
 
 function checkUrlParams() {
     var params = new URLSearchParams(window.location.search);
@@ -60,7 +121,7 @@ function updateAlgorithmInfo() {
             desc.textContent = "Sequentially assigns tasks across available workers in a fixed cyclic order.";
         } else if (select.value === "least_connections") {
             title.textContent = "Least Connections (LC)";
-            desc.textContent = "Selects the available worker with the lowest current workload.";
+            desc.textContent = "Selects the available worker with the lowest current workload (executing + queued tasks).";
         }
     }
 }
@@ -79,6 +140,12 @@ function changeAlgorithm(value) {
     .then(function (result) {
         if (result.ok) {
             updateAlgorithmInfo();
+            var archSched = document.getElementById("arch-active-scheduler");
+            if (archSched) {
+                archSched.textContent = value === "least_connections"
+                    ? "LEAST CONNECTIONS (WORKLOAD-AWARE)"
+                    : "ROUND ROBIN (CYCLIC DISPATCH)";
+            }
         }
     })
     .catch(function () {});
@@ -95,23 +162,21 @@ function syncAlgorithmDropdown() {
                 } else if (data.scheduler_name === "Least Connections") {
                     select.value = "least_connections";
                 }
-                document.getElementById("config-algorithm").textContent = data.scheduler_name;
             }
+            updateAlgorithmInfo();
         })
         .catch(function () {});
 }
 
 /* ==========================================================================
-   Task Preparation
+   Task Preparation (Backend is the authoritative Single Source of Truth)
    ========================================================================== */
 
 function addPreparedTask() {
     var nameInput = document.getElementById("task-name");
     var durationInput = document.getElementById("task-duration");
-    var arrivalInput = document.getElementById("task-arrival");
     var name = nameInput.value.trim();
     var duration = parseFloat(durationInput.value);
-    var arrival = parseFloat(arrivalInput.value);
 
     if (!name) {
         alert("Please enter a task name");
@@ -121,63 +186,48 @@ function addPreparedTask() {
         alert("Please enter a valid duration between 0.05 and 30 seconds");
         return;
     }
-    if (isNaN(arrival) || arrival < 0) {
-        alert("Please enter a valid arrival time >= 0");
-        return;
-    }
 
-    var task = {
-        id: "T" + String(taskCounter).padStart(3, "0"),
-        name: name,
-        duration: duration,
-        arrival_time: arrival,
-        status: "READY"
-    };
-
-    preparedTasks.push(task);
-    taskCounter++;
-
-    // Clear inputs
-    nameInput.value = "";
-    durationInput.value = "8";
-    arrivalInput.value = "0";
-
-    savePreparedTasks();
-    renderPreparedTasks();
-}
-
-function removePreparedTask(index) {
-    preparedTasks.splice(index, 1);
-    savePreparedTasks();
-    renderPreparedTasks();
-}
-
-function savePreparedTasks() {
-    // Send to backend to persist
     fetch("/api/simulation/prepared", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            name: preparedTasks[preparedTasks.length - 1].name,
-            duration: preparedTasks[preparedTasks.length - 1].duration,
-            arrival_time: preparedTasks[preparedTasks.length - 1].arrival_time
+            name: name,
+            duration: duration
         })
-    }).catch(function () {});
+    })
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+    .then(function (res) {
+        if (res.ok) {
+            nameInput.value = "";
+            durationInput.value = "5";
+            loadPreparedTasks();
+        } else {
+            alert("Error adding task: " + (res.data.error || "Unknown error"));
+        }
+    })
+    .catch(function (err) {
+        console.error("Error adding prepared task:", err);
+    });
+}
+
+function removePreparedTask(index) {
+    fetch("/api/simulation/prepared/" + index, {
+        method: "DELETE"
+    })
+    .then(function (r) { return r.json(); })
+    .then(function () {
+        loadPreparedTasks();
+    })
+    .catch(function (err) {
+        console.error("Error removing prepared task:", err);
+    });
 }
 
 function loadPreparedTasks() {
     fetch("/api/simulation/prepared")
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            preparedTasks = data.tasks.map(function (t, i) {
-                return {
-                    id: "T" + String(i + 1).padStart(3, "0"),
-                    name: t.name,
-                    duration: t.duration,
-                    status: t.status
-                };
-            });
-            taskCounter = preparedTasks.length + 1;
+            preparedTasks = data.tasks || [];
             renderPreparedTasks();
         })
         .catch(function () {});
@@ -188,114 +238,126 @@ function renderPreparedTasks() {
     if (!tbody) { return; }
 
     if (preparedTasks.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-row">No tasks prepared yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No tasks prepared yet. Enter a task above and click "Add Task".</td></tr>';
         return;
     }
 
     var rows = "";
     for (var i = 0; i < preparedTasks.length; i++) {
         var task = preparedTasks[i];
+        var label = task.label || ("Prepared Task " + (i + 1));
         rows += "<tr>" +
-            "<td>" + task.id + "</td>" +
+            "<td><b>" + escapeHtml(label) + "</b></td>" +
             "<td>" + escapeHtml(task.name) + "</td>" +
             "<td>" + task.duration + "s</td>" +
-            "<td>" + task.arrival_time + "s</td>" +
-            '<td><span class="task-status-badge ts-ready">' + task.status + "</span></td>' +
+            '<td><span class="task-status-badge ts-ready">' + (task.status || "READY") + "</span></td>" +
             '<td><button class="btn btn-secondary btn-sm" onclick="removePreparedTask(' + i + ')">Remove</button></td>' +
         "</tr>";
     }
     tbody.innerHTML = rows;
 }
 
-function loadSampleTasks() {
-    // Add sample tasks with different arrival times and longer durations
-    var sampleTasks = [
-        { name: "Database Query", duration: 10, arrival_time: 0 },
-        { name: "File Processing", duration: 8, arrival_time: 2 },
-        { name: "API Request", duration: 6, arrival_time: 4 },
-        { name: "Data Analysis", duration: 12, arrival_time: 6 },
-        { name: "Report Generation", duration: 7, arrival_time: 8 }
-    ];
-
-    for (var i = 0; i < sampleTasks.length; i++) {
-        var task = sampleTasks[i];
-        preparedTasks.push({
-            id: "T" + String(taskCounter).padStart(3, "0"),
-            name: task.name,
-            duration: task.duration,
-            arrival_time: task.arrival_time,
-            status: "READY"
-        });
-        taskCounter++;
-    }
-
-    savePreparedTasks();
-    renderPreparedTasks();
-}
-
 /* ==========================================================================
-   Run Simulation
+   Run Simulation (Backend Submits Prepared Tasks Exactly Once)
    ========================================================================== */
 
 function runSimulation() {
+    if (simulationRunning) {
+        return;
+    }
+
     if (preparedTasks.length === 0) {
         alert("Please add at least one task before running the simulation");
         return;
     }
 
-    // Disable task preparation
-    document.getElementById("task-name").disabled = true;
-    document.getElementById("task-duration").disabled = true;
-    document.getElementById("task-arrival").disabled = true;
-    document.querySelector(".task-entry-form button").disabled = true;
+    var nameInput = document.getElementById("task-name");
+    var durInput  = document.getElementById("task-duration");
+    var btn       = document.querySelector(".task-entry-form button");
+    var btnRun    = document.getElementById("btn-run-simulation");
+    var btnLoad   = document.getElementById("btn-load-tasks");
 
-    // Sort tasks by arrival time
-    preparedTasks.sort(function (a, b) {
-        return a.arrival_time - b.arrival_time;
-    });
+    // ── IMMEDIATELY show live section and scroll to it ──────────────────────
+    var liveSection = document.getElementById("live-simulation");
+    if (liveSection) {
+        liveSection.style.display = "block";
+        // Use instant scroll so the user lands there right away,
+        // then a smooth follow-up once the browser paints it.
+        liveSection.scrollIntoView({ behavior: "instant", block: "start" });
+    }
 
-    // Submit tasks staggered by arrival time
-    var baseTime = Date.now();
-    var submittedCount = 0;
+    // Show a launching state in the workers grid before the API responds
+    var grid = document.getElementById("workers-grid");
+    if (grid && grid.innerHTML.trim() === "") {
+        grid.innerHTML =
+            '<div class="launch-placeholder">' +
+            '<div class="launch-spinner"></div>' +
+            '<span>Submitting tasks to Load Balancer…</span>' +
+            '</div>';
+    }
 
-    preparedTasks.forEach(function (task, index) {
-        var delay = task.arrival_time * 1000; // Convert to milliseconds
+    // Update status badge immediately
+    var statusBadge = document.getElementById("sim-status");
+    if (statusBadge) {
+        statusBadge.textContent = "STARTING…";
+        statusBadge.className = "sidebar-status status-running";
+    }
 
-        setTimeout(function () {
-            fetch("/api/tasks", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    name: task.name,
-                    duration: task.duration,
-                    arrival_time: (baseTime + delay) / 1000
-                })
-            })
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                submittedCount++;
-                if (submittedCount === 1) {
-                    // First task submitted, show simulation and start polling
-                    simulationRunning = true;
-                    document.getElementById("sim-status").textContent = "RUNNING";
-                    document.getElementById("sim-status").className = "sidebar-status status-running";
-                    document.getElementById("live-simulation").style.display = "block";
-                    document.getElementById("live-simulation").scrollIntoView({ behavior: "smooth", block: "start" });
-                    startPolling();
-                }
-            })
-            .catch(function (err) {
-                console.error("Error submitting task:", err);
-            });
-        }, delay);
-    });
+    // Disable controls
+    if (nameInput) nameInput.disabled = true;
+    if (durInput)  durInput.disabled  = true;
+    if (btn)       btn.disabled       = true;
+    if (btnRun)    btnRun.disabled    = true;
+    if (btnLoad)   btnLoad.disabled   = true;
 
-    // Update simulation state
-    fetch("/api/simulation/start", {
-        method: "POST"
+    // Update arch-flow scheduler label right away
+    var algoSelect = document.getElementById("algo-select");
+    var archSched  = document.getElementById("arch-active-scheduler");
+    if (algoSelect && archSched) {
+        archSched.textContent = algoSelect.value === "least_connections"
+            ? "LEAST CONNECTIONS (WORKLOAD-AWARE)"
+            : "ROUND ROBIN (CYCLIC DISPATCH)";
+    }
+
+    // ── Single authoritative submission path ────────────────────────────────
+    fetch("/api/simulation/start", { method: "POST" })
+    .then(function (r) {
+        return r.json().then(function (d) { return { ok: r.ok, data: d }; });
     })
-    .then(function (r) { return r.json(); })
-    .catch(function () {});
+    .then(function (result) {
+        if (!result.ok) {
+            // Roll back UI on error
+            if (liveSection) liveSection.style.display = "none";
+            if (statusBadge) { statusBadge.textContent = "READY"; statusBadge.className = "sidebar-status status-ready"; }
+            if (grid) grid.innerHTML = "";
+            if (nameInput) nameInput.disabled = false;
+            if (durInput)  durInput.disabled  = false;
+            if (btn)       btn.disabled       = false;
+            if (btnRun)    btnRun.disabled    = false;
+            if (btnLoad)   btnLoad.disabled   = false;
+            alert("Failed to start simulation: " + (result.data.error || "Unknown error"));
+            return;
+        }
+
+        simulationRunning = true;
+        if (statusBadge) { statusBadge.textContent = "RUNNING"; }
+
+        // Kick off live polling immediately
+        refreshSimulation();
+        startPolling();
+    })
+    .catch(function (err) {
+        console.error("Error starting simulation:", err);
+        if (liveSection) liveSection.style.display = "none";
+        if (statusBadge) { statusBadge.textContent = "READY"; statusBadge.className = "sidebar-status status-ready"; }
+        if (grid) grid.innerHTML = "";
+        if (nameInput) nameInput.disabled = false;
+        if (durInput)  durInput.disabled  = false;
+        if (btn)       btn.disabled       = false;
+        if (btnRun)    btnRun.disabled    = false;
+        if (btnLoad)   btnLoad.disabled   = false;
+        alert("Error starting simulation. Please check server.");
+    });
 }
 
 /* ==========================================================================
@@ -303,9 +365,10 @@ function runSimulation() {
    ========================================================================== */
 
 function startPolling() {
+    stopPolling();
     pollingInterval = setInterval(function () {
         refreshSimulation();
-    }, 1500);
+    }, 1000);
 }
 
 function stopPolling() {
@@ -324,7 +387,7 @@ function refreshSimulation() {
 }
 
 /* ==========================================================================
-   Fetch Workers
+   Fetch Workers & Dedicated Queues
    ========================================================================== */
 
 function fetchWorkers() {
@@ -332,31 +395,6 @@ function fetchWorkers() {
         .then(function (r) { return r.json(); })
         .then(function (workers) {
             renderWorkers(workers);
-            fetchWorkerQueues();
-        })
-        .catch(function () {});
-}
-
-function fetchWorkerQueues() {
-    fetch("/api/workers/queues")
-        .then(function (r) { return r.json(); })
-        .then(function (queues) {
-            for (var workerId in queues) {
-                var queueItems = queues[workerId] || [];
-                var queueHtml = "";
-                if (queueItems.length === 0) {
-                    queueHtml = '<div class="worker-queue-empty">Empty</div>';
-                } else {
-                    for (var i = 0; i < queueItems.length; i++) {
-                        var q = queueItems[i];
-                        queueHtml += '<div class="worker-queue-item">' + q.task_id + ' — ' + escapeHtml(q.name) + ' (' + q.duration + 's)</div>';
-                    }
-                }
-                var queueContainer = document.getElementById("queue-" + workerId.replace(/[^a-zA-Z0-9]/g, "-"));
-                if (queueContainer) {
-                    queueContainer.innerHTML = queueHtml;
-                }
-            }
         })
         .catch(function () {});
 }
@@ -378,7 +416,7 @@ function buildWorkerPanel(w) {
 
     var currentTaskHtml = w.current_task_id
         ? '<span class="worker-current-task">' + w.current_task_id + ' — ' + escapeHtml(w.current_task_name || "") + '</span>'
-        : '<span class="worker-current-task" style="color: var(--color-text-muted);">None</span>';
+        : '<span class="worker-current-task" style="color: var(--color-text-muted);">None (Idle)</span>';
 
     var actionBtns = "";
     if (w.status === "IDLE" || w.status === "BUSY") {
@@ -388,43 +426,61 @@ function buildWorkerPanel(w) {
         actionBtns = '<button class="btn btn-recover" onclick="recoverWorker(\'' + w.worker_id + '\')">Recover Worker</button>';
     }
 
+    var threadDot = w.thread_alive ? '●' : '○';
+    var threadColor = w.thread_alive ? 'var(--color-success)' : 'var(--color-danger)';
+    var threadStateLabel = w.thread_alive ? (w.thread_state || "RUNNING") : "TERMINATED";
+
+    var queueItems = w.queue || [];
+    var queueHtml = "";
+    if (queueItems.length === 0) {
+        queueHtml = '<div class="worker-queue-empty">Queue is Empty</div>';
+    } else {
+        for (var qi = 0; qi < queueItems.length; qi++) {
+            var q = queueItems[qi];
+            queueHtml += '<div class="worker-queue-item">' +
+                '<span><b>' + escapeHtml(q.task_id) + '</b> ' + escapeHtml(q.name) + '</span>' +
+                '<span>' + q.duration + 's</span>' +
+            '</div>';
+        }
+    }
+
+    var qLen = (w.queue_size !== undefined && w.queue_size !== null) ? w.queue_size : queueItems.length;
+
     return '<div class="worker-panel">' +
         '<div class="worker-panel-header">' +
             '<span class="worker-panel-title">' + w.worker_id + '</span>' +
             '<span class="worker-status-badge ' + statusClass + '">' + w.status + '</span>' +
         '</div>' +
         '<div class="worker-section">' +
-            '<div class="worker-section-label">Worker Status</div>' +
-            '<div class="worker-section-value">' + w.status + '</div>' +
+            '<div class="worker-section-label">Dedicated Execution Thread</div>' +
+            '<div class="worker-section-value">' +
+                '<span style="color: ' + threadColor + '; font-weight: bold; margin-right: 0.5rem;">' + threadDot + ' ' + (w.thread_alive ? 'Alive' : 'Dead') + '</span>' +
+                '<span class="worker-thread-badge">' + threadStateLabel + '</span>' +
+            '</div>' +
         '</div>' +
         '<div class="worker-section">' +
-            '<div class="worker-section-label">Execution Thread</div>' +
-            '<span class="worker-thread-badge">' + threadState + '</span>' +
-        '</div>' +
-        '<div class="worker-section">' +
-            '<div class="worker-section-label">Current Task</div>' +
+            '<div class="worker-section-label">Current Active Task</div>' +
             currentTaskHtml +
         '</div>' +
         '<div class="worker-section">' +
-            '<div class="worker-section-label">Workload</div>' +
+            '<div class="worker-section-label">Workload (Executing + Queued)</div>' +
             '<div class="worker-section-value">' + w.workload + '</div>' +
         '</div>' +
         '<div class="worker-section">' +
-            '<div class="worker-section-label">Queue Length</div>' +
-            '<div class="worker-section-value">' + w.queue_size + '</div>' +
-        '</div>' +
-        '<div class="worker-section">' +
-            '<div class="worker-section-label">Queue</div>' +
+            '<div class="worker-section-label">Dedicated Queue (Length: ' + qLen + ')</div>' +
             '<div class="worker-queue" id="queue-' + w.worker_id.replace(/[^a-zA-Z0-9]/g, "-") + '">' +
-                '<div class="worker-queue-empty">Loading...</div>' +
+                queueHtml +
             '</div>' +
+        '</div>' +
+        '<div class="worker-section" style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.5rem;">' +
+            'Done: ' + w.completed + ' | Interrupted: ' + (w.interrupted || 0) + ' | Failures: ' + (w.failures || 0) + ' | Recoveries: ' + (w.recoveries || 0) +
         '</div>' +
         '<div class="worker-actions">' + actionBtns + '</div>' +
     '</div>';
 }
 
 /* ==========================================================================
-   Fetch Tasks
+   Fetch Tasks & Monitor
    ========================================================================== */
 
 function fetchTasks() {
@@ -458,13 +514,11 @@ function buildTaskRow(t) {
     var execTime = t.execution_time !== null ? t.execution_time.toFixed(3) + "s" : "-";
     var waitTime = t.waiting_time !== null ? t.waiting_time.toFixed(3) + "s" : "-";
     var worker = t.worker || "-";
-    var arrival = t.arrival_time !== null ? (t.arrival_time - t.created_at).toFixed(2) + "s" : "0s";
 
     return "<tr>" +
-        "<td>" + t.id + "</td>" +
+        "<td><b>" + t.id + "</b></td>" +
         "<td>" + escapeHtml(t.name) + "</td>" +
         "<td>" + t.duration.toFixed(2) + "s</td>" +
-        "<td>" + arrival + "</td>" +
         "<td>" + worker + "</td>" +
         '<td><span class="task-status-badge ' + statusClass + '">' + t.status + "</span></td>" +
         "<td>" + waitTime + "</td>" +
@@ -473,17 +527,22 @@ function buildTaskRow(t) {
 }
 
 /* ==========================================================================
-   Fetch Metrics
+   Fetch Real Metrics (Proper Units)
    ========================================================================== */
 
 function fetchMetrics() {
     fetch("/api/metrics")
         .then(function (r) { return r.json(); })
         .then(function (m) {
-            document.getElementById("perf-total").textContent = m.total_submitted;
-            document.getElementById("perf-avg-wait").textContent = m.avg_waiting_time.toFixed(2) + " units";
-            document.getElementById("perf-avg-exec").textContent = m.avg_execution_time.toFixed(2) + " units";
-            document.getElementById("perf-total-exec").textContent = m.total_execution_time.toFixed(2) + " units";
+            var totalElem = document.getElementById("perf-total");
+            var waitElem = document.getElementById("perf-avg-wait");
+            var execElem = document.getElementById("perf-avg-exec");
+            var totalExecElem = document.getElementById("perf-total-exec");
+
+            if (totalElem) totalElem.textContent = m.total_submitted;
+            if (waitElem) waitElem.textContent = m.avg_waiting_time.toFixed(2) + " s";
+            if (execElem) execElem.textContent = m.avg_execution_time.toFixed(2) + " s";
+            if (totalExecElem) totalExecElem.textContent = m.total_execution_time.toFixed(2) + " s";
         })
         .catch(function () {});
 }
@@ -501,7 +560,6 @@ function renderTimeline(tasks) {
     var container = document.getElementById("timeline-container");
     if (!container) { return; }
 
-    // Filter tasks that have been started (have started_at)
     var executedTasks = tasks.filter(function (t) {
         return t.started_at !== null && t.worker !== null;
     });
@@ -511,7 +569,6 @@ function renderTimeline(tasks) {
         return;
     }
 
-    // Group tasks by worker
     var tasksByWorker = {};
     for (var i = 0; i < executedTasks.length; i++) {
         var t = executedTasks[i];
@@ -521,7 +578,6 @@ function renderTimeline(tasks) {
         tasksByWorker[t.worker].push(t);
     }
 
-    // Find time range
     var minTime = null;
     var maxTime = null;
     for (var workerId in tasksByWorker) {
@@ -529,7 +585,7 @@ function renderTimeline(tasks) {
             var t = tasksByWorker[workerId][i];
             if (t.started_at !== null) {
                 if (minTime === null || t.started_at < minTime) minTime = t.started_at;
-                var endTime = t.completed_at || t.started_at + t.duration;
+                var endTime = t.completed_at || (t.started_at + t.duration);
                 if (maxTime === null || endTime > maxTime) maxTime = endTime;
             }
         }
@@ -540,15 +596,13 @@ function renderTimeline(tasks) {
         return;
     }
 
-    var totalDuration = maxTime - minTime;
+    var totalDuration = Math.max(0.1, maxTime - minTime);
 
-    // Generate colors for tasks
     var colors = [
         "#0d6efd", "#198754", "#dc3545", "#ffc107", "#0dcaf0",
         "#6f42c1", "#fd7e14", "#20c997", "#6610f2", "#d63384"
     ];
 
-    // Build timeline HTML
     var html = '<div class="timeline-legend">';
     var uniqueWorkers = Object.keys(tasksByWorker).sort();
     for (var i = 0; i < uniqueWorkers.length; i++) {
@@ -576,9 +630,9 @@ function renderTimeline(tasks) {
             var t = workerTasks[j];
             if (t.started_at !== null) {
                 var startTime = t.started_at - minTime;
-                var duration = (t.completed_at || t.started_at + t.duration) - t.started_at;
+                var duration = (t.completed_at || (t.started_at + t.duration)) - t.started_at;
                 var leftPercent = (startTime / totalDuration) * 100;
-                var widthPercent = (duration / totalDuration) * 100;
+                var widthPercent = Math.max(1, (duration / totalDuration) * 100);
 
                 html += '<div class="timeline-bar" style="' +
                     'left: ' + leftPercent + '%; ' +
@@ -594,7 +648,6 @@ function renderTimeline(tasks) {
     }
     html += '</div>';
 
-    // Time axis
     html += '<div class="timeline-time-axis">' +
         '<span class="timeline-time-label">0s</span>' +
         '<span class="timeline-time-label">' + (totalDuration / 2).toFixed(1) + 's</span>' +
@@ -605,7 +658,7 @@ function renderTimeline(tasks) {
 }
 
 /* ==========================================================================
-   Worker Actions
+   Worker Failure & Recovery (Real Backend APIs)
    ========================================================================== */
 
 function failWorker(workerId) {
@@ -615,9 +668,9 @@ function failWorker(workerId) {
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
     .then(function (result) {
         if (result.ok) {
-            // Will be reflected in next poll
+            refreshSimulation();
         } else {
-            alert("Error: " + result.data.error);
+            alert("Error: " + (result.data.error || "Could not fail worker"));
         }
     })
     .catch(function () {});
@@ -630,9 +683,9 @@ function recoverWorker(workerId) {
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
     .then(function (result) {
         if (result.ok) {
-            // Will be reflected in next poll
+            refreshSimulation();
         } else {
-            alert("Error: " + result.data.error);
+            alert("Error: " + (result.data.error || "Could not recover worker"));
         }
     })
     .catch(function () {});
@@ -662,14 +715,29 @@ function checkSimulationComplete() {
 }
 
 function showSimulationComplete(metrics) {
-    document.getElementById("sim-status").textContent = "COMPLETE";
-    document.getElementById("sim-status").className = "sidebar-status status-complete";
+    simulationRunning = false;
+    var statusElem = document.getElementById("sim-status");
+    if (statusElem) {
+        statusElem.textContent = "COMPLETE";
+        statusElem.className = "sidebar-status status-complete";
+    }
+    var compElem = document.getElementById("simulation-complete");
+    if (compElem) {
+        compElem.style.display = "block";
+    }
 
-    document.getElementById("simulation-complete").style.display = "block";
+    var nameInput = document.getElementById("task-name");
+    var durInput = document.getElementById("task-duration");
+    var btn = document.querySelector(".task-entry-form button");
+    var btnRun = document.getElementById("btn-run-simulation");
+    if (nameInput) nameInput.disabled = false;
+    if (durInput) durInput.disabled = false;
+    if (btn) btn.disabled = false;
+    if (btnRun) btnRun.disabled = false;
 }
 
 /* ==========================================================================
-   Reset Simulation
+   Reset Simulation & Backend LoadBalancer
    ========================================================================== */
 
 function resetSimulation() {
@@ -680,38 +748,273 @@ function resetSimulation() {
     })
     .then(function (r) { return r.json(); })
     .then(function (data) {
-        // Reset state
         preparedTasks = [];
-        taskCounter = 1;
         simulationRunning = false;
 
-        // Reset UI
         document.getElementById("sim-status").textContent = "READY";
         document.getElementById("sim-status").className = "sidebar-status status-ready";
         document.getElementById("live-simulation").style.display = "none";
         document.getElementById("simulation-complete").style.display = "none";
 
-        // Re-enable inputs
-        document.getElementById("task-name").disabled = false;
-        document.getElementById("task-duration").disabled = false;
-        document.querySelector(".task-entry-form button").disabled = false;
+        var nameInput = document.getElementById("task-name");
+        var durInput = document.getElementById("task-duration");
+        var btn = document.querySelector(".task-entry-form button");
+        var btnRun = document.getElementById("btn-run-simulation");
+        if (nameInput) { nameInput.disabled = false; nameInput.value = ""; }
+        if (durInput) { durInput.disabled = false; durInput.value = "5"; }
+        if (btn) { btn.disabled = false; }
+        if (btnRun) { btnRun.disabled = false; }
 
-        // Clear prepared tasks display
-        renderPreparedTasks();
+        loadPreparedTasks();
 
-        // Clear worker grid
-        document.getElementById("workers-grid").innerHTML = "";
+        var grid = document.getElementById("workers-grid");
+        if (grid) { grid.innerHTML = ""; }
 
-        // Clear task table
-        document.getElementById("task-tbody").innerHTML = '<tr><td colspan="7" class="empty-row">No tasks submitted yet.</td></tr>';
+        var tbody = document.getElementById("task-tbody");
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-row">No tasks submitted yet.</td></tr>';
+        }
 
-        // Reset metrics
-        document.getElementById("perf-total").textContent = "0";
-        document.getElementById("perf-avg-wait").textContent = "0.00 units";
-        document.getElementById("perf-avg-exec").textContent = "0.00 units";
-        document.getElementById("perf-total-exec").textContent = "0.00 units";
+        var totalElem = document.getElementById("perf-total");
+        var waitElem = document.getElementById("perf-avg-wait");
+        var execElem = document.getElementById("perf-avg-exec");
+        var totalExecElem = document.getElementById("perf-total-exec");
+        if (totalElem) totalElem.textContent = "0";
+        if (waitElem) waitElem.textContent = "0.00 s";
+        if (execElem) execElem.textContent = "0.00 s";
+        if (totalExecElem) totalExecElem.textContent = "0.00 s";
+
+        var timeline = document.getElementById("timeline-container");
+        if (timeline) {
+            timeline.innerHTML = '<p class="empty-text">Run a simulation to see the execution timeline.</p>';
+        }
     })
-    .catch(function () {});
+    .catch(function (err) {
+        console.error("Error resetting simulation:", err);
+    });
+}
+
+/* ==========================================================================
+   Bulk Task Loader (Quick Load — 10 tasks, 10–20 s each by default)
+   ========================================================================== */
+
+/**
+ * Sequentially adds `count` tasks to the backend prepared list, one by one.
+ * Each task gets a random duration between minDur and maxDur (seconds).
+ * Shows a live progress bar while submitting.
+ */
+function loadBulkTasks() {
+    var btn = document.getElementById("btn-load-tasks");
+    var progressWrap = document.getElementById("load-tasks-progress");
+    var progressBar = document.getElementById("load-tasks-bar");
+    var progressText = document.getElementById("load-tasks-progress-text");
+
+    var countInput = document.getElementById("load-task-count");
+    var minInput = document.getElementById("load-min-dur");
+    var maxInput = document.getElementById("load-max-dur");
+    var prefixInput = document.getElementById("load-name-prefix");
+
+    var count = parseInt(countInput ? countInput.value : "10", 10);
+    var minDur = parseFloat(minInput ? minInput.value : "10");
+    var maxDur = parseFloat(maxInput ? maxInput.value : "20");
+    var prefix = (prefixInput ? prefixInput.value.trim() : "") || "Task";
+
+    if (isNaN(count) || count < 1 || count > 20) {
+        alert("Number of tasks must be between 1 and 20");
+        return;
+    }
+    if (isNaN(minDur) || isNaN(maxDur) || minDur < 0.05 || maxDur > 30 || minDur >= maxDur) {
+        alert("Min duration must be < max duration, both within 0.05 – 30 s");
+        return;
+    }
+
+    // Disable controls while loading
+    if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
+    if (progressWrap) { progressWrap.style.display = "flex"; }
+    if (progressBar) { progressBar.style.width = "0%"; }
+    if (progressText) { progressText.textContent = "0 / " + count + " added"; }
+
+    // Generate task durations up-front so they look varied and realistic
+    var tasks = [];
+    for (var i = 0; i < count; i++) {
+        var dur = Math.round((minDur + Math.random() * (maxDur - minDur)) * 10) / 10;
+        tasks.push({ name: prefix + " " + (i + 1), duration: dur });
+    }
+
+    // Submit tasks one-by-one sequentially to the backend
+    function submitNext(idx) {
+        if (idx >= tasks.length) {
+            // All done
+            if (btn) { btn.disabled = false; btn.textContent = "Load Tasks"; }
+            if (progressText) { progressText.textContent = count + " / " + count + " — done!"; }
+            setTimeout(function () {
+                if (progressWrap) { progressWrap.style.display = "none"; }
+            }, 2000);
+            loadPreparedTasks();
+            return;
+        }
+
+        var t = tasks[idx];
+        fetch("/api/simulation/prepared", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: t.name, duration: t.duration })
+        })
+        .then(function (r) {
+            return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+        })
+        .then(function (res) {
+            if (!res.ok) {
+                alert("Error adding task " + (idx + 1) + ": " + (res.data.error || "Unknown error"));
+                if (btn) { btn.disabled = false; btn.textContent = "Load Tasks"; }
+                if (progressWrap) { progressWrap.style.display = "none"; }
+                loadPreparedTasks();
+                return;
+            }
+            var done = idx + 1;
+            var pct = Math.round((done / count) * 100);
+            if (progressBar) { progressBar.style.width = pct + "%"; }
+            if (progressText) { progressText.textContent = done + " / " + count + " added"; }
+            submitNext(idx + 1);
+        })
+        .catch(function (err) {
+            alert("Network error adding task " + (idx + 1) + ": " + String(err));
+            if (btn) { btn.disabled = false; btn.textContent = "Load Tasks"; }
+            if (progressWrap) { progressWrap.style.display = "none"; }
+            loadPreparedTasks();
+        });
+    }
+
+    submitNext(0);
+}
+
+/* ==========================================================================
+   Algorithm Comparison Benchmark
+   ========================================================================== */
+
+function runAlgorithmComparison() {
+    var btn = document.getElementById("btn-run-comparison");
+    var resultsDiv = document.getElementById("comparison-results");
+    if (!btn || !resultsDiv) { return; }
+
+    btn.disabled = true;
+    btn.textContent = "Running Benchmark…";
+    resultsDiv.style.display = "block";
+    resultsDiv.innerHTML = '<p style="color: var(--color-text-muted); padding: 1rem;">Running comparison — please wait, this may take a few seconds…</p>';
+
+    fetch("/api/comparison", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+    })
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+    .then(function (result) {
+        btn.disabled = false;
+        btn.textContent = "Run Benchmark Comparison";
+
+        if (!result.ok) {
+            resultsDiv.innerHTML = '<p style="color: var(--color-danger);">Error: ' + escapeHtml(result.data.error || "Unknown error") + '</p>';
+            return;
+        }
+
+        var rr = result.data.round_robin;
+        var lc = result.data.least_connections;
+
+        if (!rr || !lc) {
+            resultsDiv.innerHTML = '<p style="color: var(--color-danger);">Invalid response from server.</p>';
+            return;
+        }
+
+        function fmt(v) {
+            if (v === null || v === undefined) { return "—"; }
+            return (typeof v === "number") ? v.toFixed(3) + " s" : String(v);
+        }
+        function fmtThroughput(v) {
+            if (v === null || v === undefined) { return "—"; }
+            return (typeof v === "number") ? v.toFixed(4) + " tasks/s" : String(v);
+        }
+        function fmtCount(v) {
+            if (v === null || v === undefined) { return "—"; }
+            return String(v);
+        }
+
+        function winner(rrVal, lcVal, lowerIsBetter) {
+            if (rrVal === null || lcVal === null) { return ["", ""]; }
+            if (lowerIsBetter) {
+                if (rrVal < lcVal) { return ["🏆", ""]; }
+                if (lcVal < rrVal) { return ["", "🏆"]; }
+            } else {
+                if (rrVal > lcVal) { return ["🏆", ""]; }
+                if (lcVal > rrVal) { return ["", "🏆"]; }
+            }
+            return ["≈", "≈"];
+        }
+
+        var rows = [
+            { label: "Total Tasks Completed", rrV: rr.total_completed, lcV: lc.total_completed, fmt: fmtCount, lowerBetter: false },
+            { label: "Total Execution Time", rrV: rr.total_execution_time, lcV: lc.total_execution_time, fmt: fmt, lowerBetter: true },
+            { label: "Avg Waiting Time", rrV: rr.avg_waiting_time, lcV: lc.avg_waiting_time, fmt: fmt, lowerBetter: true },
+            { label: "Avg Execution Time", rrV: rr.avg_execution_time, lcV: lc.avg_execution_time, fmt: fmt, lowerBetter: true },
+            { label: "Throughput", rrV: rr.throughput, lcV: lc.throughput, fmt: fmtThroughput, lowerBetter: false },
+        ];
+
+        var tableHtml =
+            '<table class="task-table" style="width:100%;">' +
+            '<thead><tr>' +
+            '<th>Metric</th>' +
+            '<th>Round Robin (RR)</th>' +
+            '<th>Least Connections (LC)</th>' +
+            '</tr></thead>' +
+            '<tbody>';
+
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var w = winner(row.rrV, row.lcV, row.lowerBetter);
+            tableHtml +=
+                '<tr>' +
+                '<td><b>' + row.label + '</b></td>' +
+                '<td>' + w[0] + ' ' + row.fmt(row.rrV) + '</td>' +
+                '<td>' + w[1] + ' ' + row.fmt(row.lcV) + '</td>' +
+                '</tr>';
+        }
+
+        tableHtml += '</tbody></table>';
+
+        var workerRR = "";
+        if (rr.worker_workloads) {
+            for (var wid in rr.worker_workloads) {
+                workerRR += '<span style="margin-right:1rem;">' + wid + ': ' + rr.worker_workloads[wid] + '</span>';
+            }
+        }
+        var workerLC = "";
+        if (lc.worker_workloads) {
+            for (var wid in lc.worker_workloads) {
+                workerLC += '<span style="margin-right:1rem;">' + wid + ': ' + lc.worker_workloads[wid] + '</span>';
+            }
+        }
+
+        var workerSection = "";
+        if (workerRR || workerLC) {
+            workerSection =
+                '<div style="margin-top:1rem; padding:1rem; background:var(--color-surface-alt); border-radius:var(--radius); border:1px solid var(--color-border);">' +
+                '<b>Worker Utilization</b><br>' +
+                '<div style="margin-top:0.5rem; font-size:0.85rem;">' +
+                '<div><b>RR:</b> ' + (workerRR || "—") + '</div>' +
+                '<div style="margin-top:0.3rem;"><b>LC:</b> ' + (workerLC || "—") + '</div>' +
+                '</div></div>';
+        }
+
+        var noteHtml = '<p style="margin-top:0.75rem; font-size:0.8rem; color:var(--color-text-muted);">' +
+            '🏆 = winner for that metric. Each algorithm ran on a fresh, isolated LoadBalancer instance with the same task workload. Results may vary run-to-run due to OS thread scheduling.' +
+            '</p>';
+
+        resultsDiv.innerHTML = tableHtml + workerSection + noteHtml;
+    })
+    .catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = "Run Benchmark Comparison";
+        resultsDiv.innerHTML = '<p style="color: var(--color-danger);">Network error: ' + escapeHtml(String(err)) + '</p>';
+    });
 }
 
 /* ==========================================================================

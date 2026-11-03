@@ -267,6 +267,40 @@ class Worker:
         with self._lock:
             self.status = WorkerStatus.STOPPED
 
+    def reset(self) -> None:
+        """
+        Safely reset the worker to IDLE state with a clean thread and empty queue.
+        Stops any running thread, drains the queue, clears all statistics,
+        and starts a fresh execution thread.
+        """
+        self._stop_event.set()
+        self._fail_event.set()
+        self.task_queue.put(None)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+        with self._lock:
+            self.task_queue = queue.Queue()
+            self.current_task = None
+            self.completed_task_count = 0
+            self.failed_task_count = 0
+            self.interrupted_task_count = 0
+            self.assigned_task_count = 0
+            self.failure_count = 0
+            self.recovery_count = 0
+            self.total_execution_time = 0.0
+
+            self._stop_event.clear()
+            self._fail_event.clear()
+            self.status = WorkerStatus.IDLE
+
+            self._thread = threading.Thread(
+                target=self._run,
+                name=f"Thread-{self.worker_id}",
+                daemon=True,
+            )
+            self._thread.start()
+
     def get_workload(self) -> int:
         """
         Calculate the current workload of this worker.
@@ -350,6 +384,7 @@ class Worker:
                 "current_task_id": self.current_task.task_id if self.current_task else None,
                 "current_task_name": self.current_task.name if self.current_task else None,
                 "queue_size": queue_size,
+                "queue": self.get_queue_snapshot(),
                 "workload": workload,
                 "completed": self.completed_task_count,
                 "failed": self.failed_task_count,

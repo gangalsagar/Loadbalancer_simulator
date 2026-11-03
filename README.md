@@ -268,12 +268,14 @@ Healthy Workers: 3/3
 3. View Worker Status
 4. View Task Status
 5. View All Tasks
-6. Change Scheduling Algorithm
-7. View Metrics & Compare Algorithms
+6. Switch Scheduler
+7. View Metrics
 8. Simulate Worker Failure
 9. Recover Worker
 10. View Failed Workers
-11. Exit
+11. Reset Simulation
+12. Algorithm Comparison
+13. Exit
 ========================================
 Choose option:
 ```
@@ -296,22 +298,26 @@ Choose option:
 
 ## 11. How to Run Tests
 
-Run the complete test suite using Python's built-in `unittest` runner:
+Run the complete test suite using Python's built-in `unittest` runner or `pytest`:
 
 ```bash
 python -m unittest discover -s tests -v
+# or
+python -m pytest -q
 ```
-*(Or `.\venv\Scripts\python.exe -m unittest discover -s tests -v` on Windows)*
 
-**All 75 tests pass cleanly** (47 Phase 1–3 + 28 Phase 4 web tests):
+**All 109 tests pass cleanly**:
 * Task lifecycle, unique sequential IDs, state transitions.
-* Worker execution, workload calculation, and graceful stop.
+* Worker execution, workload calculation, dedicated execution threads, and graceful stop.
 * Round Robin and Least Connections fault-tolerant selection.
 * Worker failure simulation and active task interruption.
 * Queued task draining and automatic re-routing.
 * Worker thread recovery without thread leaks.
 * Concurrency race-condition prevention under simultaneous submission and failure.
 * Full 30-task stress test verifying zero lost recoverable tasks and zero duplicate completions.
+* Complete `LoadBalancer.reset()` and `Worker.reset()` suite (state, queue draining, thread cleanup, ID restart).
+* Single-source-of-truth prepared task lifecycle and duplicate submission prevention.
+* REST API endpoints and web client testing.
 
 ---
 
@@ -427,12 +433,13 @@ loadbalancer/
 8. Observe the Throughput History chart accumulate data over time
 9. Check the Task Status Distribution doughnut updates as tasks complete
 
-### Limitations (Phase 4)
+### Limitations & Important Clarifications
 
-* **Single-machine simulation:** Workers are Python threads, not real remote servers.
-* **No persistence:** All state is in-memory; restarting the server resets all tasks and metrics.
-* **No authentication:** Dashboard is intended for local/development use only (bound to 127.0.0.1).
-* **No WebSockets:** Dashboard uses HTTP polling (1.5 s interval) rather than push notifications.
+* **Single-Machine Simulation:** This is a functional distributed load balancer **SIMULATOR** running concurrently on a single physical machine. Backend workers are logical/virtual workers implemented using independent Python threads (`threading.Thread`) and isolated task queues (`queue.Queue`). It does **not** model or claim to be a physical multi-machine distributed cluster.
+* **Python Global Interpreter Lock (GIL):** Because standard CPython employs a Global Interpreter Lock (GIL), CPU-bound Python threads do not achieve true multi-core CPU parallelism. The simulator demonstrates concurrent worker/task orchestration, thread synchronization, mutual exclusion, asynchronous queues, dynamic scheduling, and failure recovery rather than physical distributed cluster throughput.
+* **Unified Single Backend:** Both the CLI (`main.py`) and Web Dashboard (`app.py`) operate on the exact same backend architecture (`LoadBalancer` -> `Scheduler` -> `Worker` -> `Queue` -> `Thread` -> `Metrics`). Real task IDs (`T001`, `T002`, ...) are authoritative and generated strictly by the backend.
+* **In-Memory Volatility:** All task registries, queues, and metrics are held in-memory; resetting via the UI or CLI clears all state and restarts workers in clean IDLE states.
+* **Local Development Focus:** The Web Dashboard is bound to `127.0.0.1` without external authentication, intended for educational and academic evaluation.
 
 ---
 

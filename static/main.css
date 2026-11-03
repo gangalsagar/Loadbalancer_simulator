@@ -18,6 +18,8 @@
     --color-danger: #dc3545;
     --color-danger-bg: #f8d7da;
     --color-warning: #ffc107;
+
+    --header-height: 58px; /* sticky header compensation */
     --color-warning-bg: #fff3cd;
     --color-info: #0dcaf0;
     --color-info-bg: #cff4fc;
@@ -230,6 +232,7 @@ a:hover {
     border-radius: var(--radius-lg);
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    scroll-margin-top: 70px; /* clear sticky header on scrollIntoView */
 }
 
 .section-gray {
@@ -1051,24 +1054,71 @@ a:hover {
 }
 
 .worker-queue {
-    background: var(--color-surface);
+    background: #fdfdfe;
     border: 1px solid var(--color-border);
     border-radius: var(--radius);
-    padding: 0.75rem;
-    min-height: 80px;
+    padding: 0.6rem;
+    min-height: 70px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
 }
 
 .worker-queue-item {
-    font-size: 0.875rem;
-    color: var(--color-text);
-    padding: 0.25rem 0;
+    font-size: 0.8rem;
+    background: #f1f5f9;
+    border-left: 3px solid var(--color-primary);
+    border-radius: 4px;
+    padding: 0.3rem 0.5rem;
     font-family: "Consolas", monospace;
+    display: flex;
+    justify-content: space-between;
 }
 
 .worker-queue-empty {
     font-size: 0.875rem;
     color: var(--color-text-muted);
     font-style: italic;
+    padding: 0.5rem;
+    text-align: center;
+}
+
+/* Architecture Flow Diagram */
+.arch-flow-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.arch-flow-step {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.arch-flow-tag {
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--color-primary);
+    letter-spacing: 0.05em;
+}
+
+.arch-flow-sub {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+}
+
+.arch-flow-arrow {
+    font-size: 1.25rem;
+    color: var(--color-text-muted);
+    font-weight: bold;
 }
 
 .worker-actions {
@@ -1311,4 +1361,134 @@ a:hover {
     .config-panel {
         flex-direction: column;
     }
+    .load-tasks-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Launch placeholder (spinner shown instantly when Run Simulation clicked)
+   -------------------------------------------------------------------------- */
+.launch-placeholder {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 2rem 1.5rem;
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+    font-weight: 500;
+    grid-column: 1 / -1;
+}
+
+.launch-spinner {
+    width: 22px;
+    height: 22px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* --------------------------------------------------------------------------
+   Load Tasks (Quick Bulk Loader)
+   -------------------------------------------------------------------------- */
+.load-tasks-panel {
+    margin-top: 1.25rem;
+    padding: 1.125rem 1.25rem;
+    background: var(--color-primary-light);
+    border: 1.5px solid #b6d4fe;
+    border-radius: var(--radius);
+}
+
+.load-tasks-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 0.85rem;
+    flex-wrap: wrap;
+}
+
+.load-tasks-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--color-primary);
+    white-space: nowrap;
+}
+
+.load-tasks-desc {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+}
+
+.load-tasks-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.load-tasks-count-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.form-input-sm {
+    width: 7rem;
+    font-size: 0.85rem;
+    padding: 0.35rem 0.6rem;
+}
+
+/* Accent button (purple-ish teal) for Load Tasks */
+.btn-accent {
+    background: #0d6efd;
+    color: #fff;
+    border: none;
+    padding: 0.5rem 1.25rem;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    align-self: flex-end;
+    transition: background 0.15s;
+}
+.btn-accent:hover { background: #0b5ed7; }
+.btn-accent:disabled { opacity: 0.6; cursor: default; }
+
+/* Progress bar */
+.load-tasks-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.85rem;
+}
+
+.load-tasks-bar-wrap {
+    flex: 1;
+    height: 8px;
+    background: #d0e4ff;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.load-tasks-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--color-primary);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+}
+
+.load-tasks-progress-text {
+    font-size: 0.78rem;
+    color: var(--color-primary);
+    font-weight: 600;
+    white-space: nowrap;
 }
