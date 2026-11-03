@@ -1,5 +1,5 @@
 """
-Unit tests for Worker / Server backend execution.
+Unit tests for Worker / Server backend execution and workload tracking.
 """
 
 import time
@@ -16,14 +16,41 @@ class TestWorker(unittest.TestCase):
         self.assertEqual(worker.status, WorkerStatus.IDLE)
         self.assertIsNone(worker.current_task)
         self.assertEqual(worker.completed_task_count, 0)
+        self.assertEqual(worker.failed_task_count, 0)
+        self.assertEqual(worker.assigned_task_count, 0)
         self.assertEqual(worker.task_queue.qsize(), 0)
+        self.assertEqual(worker.get_workload(), 0)
 
         info = worker.get_status_dict()
         self.assertEqual(info["worker_id"], "Worker-1")
         self.assertEqual(info["status"], "IDLE")
         self.assertIsNone(info["current_task_id"])
         self.assertEqual(info["queue_size"], 0)
+        self.assertEqual(info["workload"], 0)
         self.assertEqual(info["completed"], 0)
+        self.assertEqual(info["failed"], 0)
+        self.assertEqual(info["assigned"], 0)
+
+    def test_workload_calculation_idle_and_queued(self) -> None:
+        worker = Worker(worker_id="Worker-Wkld")
+        self.assertEqual(worker.get_workload(), 0)
+
+        # Add 3 tasks without starting worker thread
+        t1 = Task("T1")
+        t2 = Task("T2")
+        t3 = Task("T3")
+        worker.add_task(t1)
+        worker.add_task(t2)
+        worker.add_task(t3)
+
+        # Queued tasks = 3, executing = 0 -> workload = 3
+        self.assertEqual(worker.get_workload(), 3)
+        self.assertEqual(worker.assigned_task_count, 3)
+
+        # Simulate executing 1 task
+        worker.current_task = t1
+        # Now 1 executing + 3 in queue = 4
+        self.assertEqual(worker.get_workload(), 4)
 
     def test_worker_task_execution(self) -> None:
         worker = Worker(worker_id="Worker-Test")
@@ -44,6 +71,8 @@ class TestWorker(unittest.TestCase):
             self.assertEqual(worker.completed_task_count, 1)
             self.assertEqual(worker.status, WorkerStatus.IDLE)
             self.assertIsNone(worker.current_task)
+            self.assertEqual(worker.get_workload(), 0)
+            self.assertGreater(worker.total_execution_time, 0.0)
         finally:
             worker.stop()
 
@@ -62,6 +91,7 @@ class TestWorker(unittest.TestCase):
             self.assertEqual(t1.status, TaskStatus.COMPLETED)
             self.assertEqual(t2.status, TaskStatus.COMPLETED)
             self.assertEqual(worker.completed_task_count, 2)
+            self.assertEqual(worker.assigned_task_count, 2)
         finally:
             worker.stop()
 
@@ -69,10 +99,11 @@ class TestWorker(unittest.TestCase):
         worker = Worker(worker_id="Worker-Stop")
         worker.start()
         self.assertEqual(worker.status, WorkerStatus.IDLE)
+        self.assertTrue(worker.is_available)
         worker.stop()
         self.assertEqual(worker.status, WorkerStatus.STOPPED)
+        self.assertFalse(worker.is_available)
 
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -19,6 +19,7 @@ class TaskStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"
 
 
 class TaskIdGenerator:
@@ -83,6 +84,14 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     result: Optional[str] = None
     error: Optional[str] = None
+    scheduling_algorithm: Optional[str] = None
+    workload_before_assignment: Optional[int] = None
+    workload_after_assignment: Optional[int] = None
+    interrupted_at: Optional[float] = None
+    failure_reason: Optional[str] = None
+    was_re_routed: bool = False
+    original_worker: Optional[str] = None
+    retry_count: int = 0
 
     @property
     def execution_time(self) -> Optional[float]:
@@ -127,4 +136,21 @@ class Task:
         self.completed_at = time.time()
         self.status = TaskStatus.FAILED
         self.error = error
+
+    def mark_interrupted(self, reason: str = "Worker failure") -> None:
+        """Mark the task as interrupted due to worker failure."""
+        self.completed_at = time.time()
+        self.interrupted_at = self.completed_at
+        self.status = TaskStatus.INTERRUPTED
+        self.failure_reason = reason
+        self.error = f"Interrupted: {reason}"
+
+    def mark_re_routed(self, new_worker_id: str) -> None:
+        """Mark the task as re-routed to a new worker after failure."""
+        if self.original_worker is None and self.assigned_worker is not None:
+            self.original_worker = self.assigned_worker
+        self.assigned_worker = new_worker_id
+        self.was_re_routed = True
+        self.retry_count += 1
+        self.status = TaskStatus.QUEUED
 

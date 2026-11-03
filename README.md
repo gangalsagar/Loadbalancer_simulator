@@ -1,28 +1,40 @@
 # Python-based Functional Load Balancer
 
-An Operating Systems (OS) mini-project implementing a real, concurrent, thread-based functional load balancer in Python.
+An Operating Systems (OS) mini-project implementing a real, concurrent, thread-based functional load balancer in Python with dynamic scheduling, fault tolerance, and synchronization.
 
 ---
 
 ## 1. Project Objective
 
-The primary objective of this project is to model and implement the fundamental Operating Systems concepts of **concurrency, thread-safe queuing, process/thread scheduling, and resource distribution** through a real functional load balancer.
+The primary objective of this project is to model and implement the fundamental Operating Systems concepts of **concurrency, thread-safe queuing, process/thread scheduling, workload tracking, mutual exclusion, race-condition prevention, fault tolerance, and failure recovery** through a real functional load balancer.
 
 Unlike UI simulations or static mocks, this system actually spawns independent backend worker threads, ingests tasks through a centralized load balancer, schedules them across workers using scheduling policies, and executes workloads concurrently.
 
-> **Scope Note:** This repository currently implements **ONLY PHASE 1 (Core Load Balancer)**.  
-> Phases 2, 3, and 4 are strictly deferred to future milestones.
+> **Scope Note:** This repository currently implements:
+> - **PHASE 1 (Core Load Balancer)**
+> - **PHASE 2 (Intelligent Load Balancing)**
+> - **PHASE 3 (Fault Tolerance & Synchronization)**
+>
+> Phase 4 (Flask Web Dashboard, Charts) is strictly deferred to the next milestone.
+>
+> **Logical/Virtual Worker Clarification:** The backend workers are logical/virtual workers implemented as Python threads (`threading.Thread`) running concurrently on a single physical machine. This simulates distributed server nodes within a shared-memory environment.
 
 ---
 
 ## 2. What the Load Balancer Does
 
 1. **Ingests Tasks:** Accepts tasks submitted individually or in batches from clients/users.
-2. **Assigns via Scheduling Algorithm:** Distributes tasks across backend workers using the **Round Robin** algorithm.
-3. **Executes Concurrently:** Dispatches tasks to backend worker threads, each maintaining an isolated, thread-safe task queue (`queue.Queue`). Multiple workers execute their assigned tasks simultaneously in parallel threads.
-4. **Tracks Lifecycle States:** Monitors each task through its full lifecycle: `PENDING` -> `QUEUED` -> `RUNNING` -> `COMPLETED` / `FAILED`.
-5. **Provides Monitoring & Metrics:** Exposes worker status, current queue lengths, completed task counts, and turnaround/execution timing via a clean interactive CLI.
-6. **Graceful Shutdown:** Implements clean thread termination without abruptly aborting execution.
+2. **Selects Scheduling Algorithms:** Supports dynamic switching between **Round Robin** and **Least Connections (Least Workload)**.
+3. **Tracks Real-Time Workloads:** Monitors each worker's active workload defined as:
+   $$\text{Current Workload} = (\text{1 if currently executing a task else 0}) + \text{Queued Tasks}$$
+4. **Executes Concurrently:** Dispatches tasks to backend worker threads, each maintaining an isolated, thread-safe task queue (`queue.Queue`). Multiple workers execute their assigned tasks simultaneously in parallel threads.
+5. **Tracks Task Lifecycle States:** Monitors each task through its full lifecycle: `PENDING` -> `QUEUED` -> `RUNNING` -> `COMPLETED` / `FAILED` / `INTERRUPTED`.
+6. **Simulates Worker Failure (Phase 3):** Simulates unexpected worker crashes. Actively executing tasks are cleanly caught and marked `INTERRUPTED`, and unexecuted queued tasks are atomically drained and re-routed to healthy workers.
+7. **Recovers Failed Workers (Phase 3):** Restores failed workers to `IDLE` state, restarts clean worker threads without duplicate thread leaks, and re-enables them for scheduling.
+8. **Fault-Tolerant Schedulers (Phase 3):** Both Round Robin and Least Connections strictly filter out failed workers, ensuring no tasks are assigned to unavailable nodes.
+9. **Provides Monitoring & Metrics:** Exposes worker states, available/failed status, workloads, queue lengths, failure/recovery counts, execution time, waiting time, and throughput via a clean interactive CLI.
+10. **Benchmarking & Comparison:** Runs controlled head-to-head performance benchmarks under identical workloads to compare Round Robin against Least Connections using measured empirical data.
+11. **Graceful Shutdown:** Implements clean thread termination using sentinels and termination events without abruptly aborting execution.
 
 ---
 
@@ -30,174 +42,252 @@ Unlike UI simulations or static mocks, this system actually spawns independent b
 
 ```text
 CLIENT / TASK GENERATOR
-        │
-        ▼
-+───────────────────────────+
-│       LOAD BALANCER       │
-│                           │
-│   Round Robin Scheduler   │
-+─────────────┬─────────────+
-              │
-    ┌─────────┼─────────┐
-    │         │         │
-    ▼         ▼         ▼
-+─────────+ +─────────+ +─────────+
-│Worker-1 │ │Worker-2 │ │Worker-3 │
-│  Queue  │ │  Queue  │ │  Queue  │
-+────┬────+ +────┬────+ +────┬────+
-     │           │           │
-     ▼           ▼           ▼
-[Thread 1]  [Thread 2]  [Thread 3]
-  Execute     Execute     Execute
-  Tasks       Tasks       Tasks
-(Concurrent Execution Across Workers)
+        |
+        v
++------------------------------------+
+|           LOAD BALANCER            |
+|                                    |
+|   Active Scheduler Selection:      |
+|   - Round Robin (Fault-Tolerant)   |
+|   - Least Connections (Workload)   |
+|                                    |
+|   Fault Tolerance Coordinator:     |
+|   - Worker Failure Simulation      |
+|   - Task Interruption & Draining   |
+|   - Re-routing Engine              |
+|   - Worker Thread Recovery         |
++-----------------+------------------+
+                  |
+        +---------+---------+
+        |         |         |
+        v         v         v
+    +---------+ +---------+ +---------+
+    |Worker-1 | |Worker-2 | |Worker-3 |
+    |  Queue  | |  Queue  | |  Queue  |
+    +----+----+ +----+----+ +----+----+
+         |           |           |
+         v           v           v
+    [Thread 1]  [Thread 2]  [Thread 3]
+      Execute     Execute     Execute
+      Tasks       Tasks       Tasks
+    (Concurrent Execution Across Workers)
 ```
 
-### Producer-Consumer Flow
-1. **Producer:** The client or task generator produces tasks and submits them to the `LoadBalancer`.
-2. **Scheduler:** The `RoundRobinScheduler` atomically determines the target worker (`Worker-1 -> Worker-2 -> Worker-3 -> ...`).
-3. **Queue:** The task is pushed to the target worker's FIFO queue (`queue.Queue`).
-4. **Consumer:** Each `Worker` thread independently consumes tasks from its queue, marks the task `RUNNING`, executes the workload, and marks it `COMPLETED`.
+---
+
+## 4. Phase 3: Fault Tolerance & Synchronization
+
+### 1. Worker Failure Model
+Workers distinguish strictly between four lifecycle states:
+* `IDLE`: Worker is active, healthy, and waiting for tasks.
+* `BUSY`: Worker is actively executing a task.
+* `FAILED`: Worker unexpectedly became unavailable during operation. It cannot accept new tasks and is excluded by schedulers.
+* `STOPPED`: Worker was intentionally terminated during application shutdown.
+
+### 2. Failure Simulation
+When a worker failure is triggered (`simulate_worker_failure(worker_id)` or CLI Option 8):
+1. The worker's state transitions to `FAILED`.
+2. A failure event (`_fail_event`) is set.
+3. If a task was actively executing:
+   - The worker thread waiting on `_fail_event.wait(timeout=task.duration)` is immediately interrupted.
+   - The executing task is marked `INTERRUPTED` with an interruption timestamp and failure reason.
+   - The task is **never** silently marked as completed.
+4. The worker thread terminates cleanly.
+
+### 3. Handling Queued Tasks (Re-routing)
+When a worker fails while tasks are waiting in its queue:
+1. `worker.drain_queued_tasks()` atomically removes all unexecuted tasks from the queue under a reentrant lock (`threading.RLock`).
+2. The `LoadBalancer` re-routes each recovered task through the active scheduler to healthy available workers.
+3. The task's `was_re_routed` flag is set to `True`, `retry_count` is incremented, and its `original_worker` is recorded.
+4. **No recoverable tasks are silently lost or duplicated.**
+
+### 4. Scheduler Fault Tolerance
+Both schedulers strictly filter candidate workers using `worker.is_available`:
+* **Round Robin:** Automatically skips failed workers:
+  If `Worker-2` is `FAILED`, scheduling cycles strictly across healthy workers:
+  $$\text{Worker-1} \rightarrow \text{Worker-3} \rightarrow \text{Worker-1} \rightarrow \text{Worker-3}$$
+* **Least Connections:** Evaluates workload only among healthy, running workers.
+* **All-Workers-Failed Handling:** If all workers are failed, schedulers raise a `RuntimeError`, and the LoadBalancer holds tasks in a safe `PENDING` backlog rather than silently dropping them.
+
+### 5. Worker Recovery
+When a failed worker is restored (`recover_worker(worker_id)` or CLI Option 9):
+1. Validates that the worker is currently `FAILED`.
+2. Verifies that the previous thread has fully terminated (`_thread.join(timeout=3.0)`) to prevent duplicate thread leaks.
+3. Clears internal failure events (`_fail_event.clear()`) and increments `recovery_count`.
+4. Spawns a fresh worker thread and transitions state to `IDLE`.
+5. Dispatches any backlogged tasks that were waiting for an available worker.
+6. The worker is immediately available for new task assignments.
 
 ---
 
-## 4. Phase 1 Features
+## 5. Synchronization & Race-Condition Prevention
 
-* **Task Model (`task.py`):**
-  - Unique task identification (`T001`, `T002`, ...).
-  - Explicit states: `PENDING`, `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`.
-  - Timing metrics: creation time, start time, completion time, waiting time, execution time, and turnaround time.
-* **Backend Workers (`server.py`):**
-  - Independent `Worker` instances (3 workers by default).
-  - Thread-safe FIFO task queues (`queue.Queue`).
-  - Dedicated background thread per worker (`threading.Thread`).
-  - Real worker states: `IDLE`, `BUSY`, `STOPPED`.
-  - Task completion counters and current task tracking.
-* **Round Robin Scheduler (`scheduler.py`):**
-  - Circular round-robin scheduling algorithm.
-  - Thread-safe index increment and wraparound.
-  - Decoupled from CLI and load balancer logic for extensibility.
-* **Load Balancer Coordinator (`load_balancer.py`):**
-  - Central manager for workers and scheduler.
-  - Thread-safe task repository and lookup.
-  - Real-time metrics collection: submitted, running, queued, completed counts.
-  - Graceful worker shutdown mechanism.
-* **Interactive CLI (`main.py`):**
-  - Option 1: Submit individual task.
-  - Option 2: Submit batch tasks.
-  - Option 3: View real-time worker status and queue sizes.
-  - Option 4: Query specific task status and execution metrics.
-  - Option 5: View all submitted tasks in a formatted table.
-  - Option 6: Gracefully exit and terminate threads.
-  - Automated demonstration flag: `--demo`.
-* **Testing & Verification (`tests/`):**
-  - 18 comprehensive unit and concurrency tests covering task models, workers, round-robin distribution, and concurrent execution speedup.
+This project demonstrates rigorous OS synchronization:
+
+| Shared State | Synchronization Mechanism | Race Condition Prevented |
+| :--- | :--- | :--- |
+| Worker State & Workload | `threading.RLock` | Prevents reads of inconsistent workload during state transitions. |
+| Task Queues | `queue.Queue` (Monitors) | Eliminates race conditions during concurrent enqueue/dequeue. |
+| Worker Execution / Interruption | `threading.Event` (`_fail_event`) | Allows immediate thread interruption without dangerous thread kills. |
+| Task Recovery / Draining | Atomic drain under `_lock` | Prevents tasks from being drained or re-routed twice. |
+| Thread Re-creation | `_thread.join()` before new spawn | Prevents multiple concurrent threads operating on one Worker object. |
+| Simultaneous Submit & Fail | Retry loop in `submit_task` | Catches workers failing in the split-second between selection and enqueue. |
+
+> **Critical Locking Rule:** Mutex locks are held only for momentary memory updates. Workload execution (`time.sleep` / event wait) is performed **outside** locks, completely eliminating lock contention and priority inversion.
 
 ---
 
-## 5. Technologies Used
+## 6. Task State Machine
+
+```text
+               [Submit]
+                  |
+                  v
+              (PENDING)
+                  |
+            [Queue Task]
+                  |
+                  v
+              (QUEUED) <------------------+
+                  |                       |
+            [Worker Starts]               | [Drained & Re-routed]
+                  |                       |
+                  v                       |
+              (RUNNING)                   |
+             /    |    \                  |
+    [Success]/    |     \[Worker Crash]   |
+           v      |      v                |
+(COMPLETED)       |   (INTERRUPTED)       |
+                  |                       |
+            [Exception]                   |
+                  |                       |
+                  v                       |
+               (FAILED)                   |
+                                          |
+      [Worker Fails While Task in Queue]--+
+```
+
+---
+
+## 7. Scheduling Algorithms
+
+### 1. Round Robin
+* Cycles sequentially through available workers:
+  $$\text{Worker-1} \rightarrow \text{Worker-2} \rightarrow \text{Worker-3} \rightarrow \text{Worker-1} \dots$$
+* Simple, predictable, $O(1)$ selection overhead.
+* Oblivious to worker queue depths.
+
+### 2. Least Connections / Least Workload
+* Evaluates active workload across healthy workers:
+  $$\text{Current Workload} = (\text{1 if executing else 0}) + \text{Queued Tasks}$$
+* Routes tasks to the worker with the lowest workload.
+* Deterministic tie-breaking: selects the first worker in sequence when workloads are equal.
+* Prevents head-of-line blocking under non-uniform task durations.
+
+---
+
+## 8. Technologies Used
 
 * **Language:** Python 3.10+ (tested on Python 3.10.11)
 * **Standard Library Primitives:**
-  - `threading` (Worker threads, thread safety via `threading.Lock`, coordination via `threading.Event`)
-  - `queue` (Thread-safe FIFO task queues)
-  - `time` (Timestamping and simulated workload execution)
+  - `threading` (`threading.Thread`, `threading.RLock`, `threading.Event`)
+  - `queue` (`queue.Queue`)
+  - `time` (Timestamping, timing metrics, and simulated execution)
   - `dataclasses` (Task model)
   - `enum` (TaskStatus, WorkerStatus)
-  - `typing` (Type annotations)
-  - `argparse` (CLI argument parsing)
-  - `logging` (Timestamped event logging)
-  - `unittest` (Test suite)
-* **External Dependencies:** **None** (Phase 1 intentionally uses 100% standard library).
+  - `typing` (Type hints across all modules)
+  - `argparse` (CLI parsing)
+  - `logging` (Timestamped event logs)
+  - `unittest` (Automated test suite)
+* **External Dependencies:** **None** (100% Python standard library).
 
 ---
 
-## 6. Project Structure
+## 9. Project Structure
 
 ```text
 loadbalancer/
-├── main.py                  # CLI entry point and interactive user interface
-├── load_balancer.py         # Core LoadBalancer coordinator class
-├── server.py                # Worker thread and server abstraction
-├── scheduler.py             # Round Robin scheduling implementation
-├── task.py                  # Task abstraction, lifecycle states, and ID generator
+├── main.py                  # CLI entry point, interactive menu (1-11), and demo runners
+├── load_balancer.py         # Core LoadBalancer coordinator, failure simulation, and metrics
+├── server.py                # Worker thread, failure handling, queue draining, and recovery
+├── scheduler.py             # Fault-tolerant Round Robin, Least Connections, and factory
+├── comparison.py            # Controlled head-to-head algorithm comparison benchmark
+├── task.py                  # Task model, lifecycle states (INTERRUPTED), and ID generator
 ├── requirements.txt         # Dependency documentation (standard library only)
-├── README.md                # Project documentation and guide
+├── README.md                # Project documentation and Operating Systems guide
 └── tests/
     ├── __init__.py          # Test package indicator
     ├── test_task.py         # Unit tests for task creation, state, and ID generation
-    ├── test_server.py       # Unit tests for worker threads, queues, and execution
-    ├── test_scheduler.py    # Unit tests verifying exact Round Robin rotation
-    ├── test_load_balancer.py# Unit tests for submission, tracking, and metrics
-    └── test_concurrency.py  # Concurrency benchmark and execution window overlap test
+    ├── test_server.py       # Unit tests for worker threads, workload calculation, and execution
+    ├── test_scheduler.py    # Unit tests for Round Robin and Least Connections selection
+    ├── test_load_balancer.py# Unit tests for submission, dynamic switching, and metrics
+    ├── test_concurrency.py  # Concurrency benchmark and execution window overlap test
+    ├── test_comparison.py   # Unit tests for comparison benchmark runner and formatter
+    └── test_fault_tolerance.py # Unit, integration, concurrency, and stress tests for Phase 3
 ```
 
 ---
 
-## 7. How to Install
-
-Phase 1 requires Python 3.10 or higher. No external pip packages are required.
+## 10. How to Install & Run
 
 ### 1. Clone or navigate to the directory:
 ```bash
 cd loadbalancer
 ```
 
-### 2. (Optional) Create and activate a virtual environment:
-**Windows (PowerShell):**
+### 2. (Optional) Virtual Environment:
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-**Linux / macOS:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
----
-
-## 8. How to Run
-
-### Interactive CLI Mode
+### 3. Run the Interactive CLI:
 ```bash
 python main.py
 ```
 *(Or `.\venv\Scripts\python.exe main.py` on Windows)*
 
-You will be greeted with the interactive menu:
+Interactive menu:
 ```text
 ========================================
 PYTHON LOAD BALANCER
 ====================
 Workers: 3
-Algorithm: Round Robin
+Current Scheduling Algorithm: ROUND ROBIN
+Healthy Workers: 3/3
 
 1. Submit Task
 2. Submit Multiple Tasks
 3. View Worker Status
 4. View Task Status
 5. View All Tasks
-6. Exit
+6. Change Scheduling Algorithm
+7. View Metrics & Compare Algorithms
+8. Simulate Worker Failure
+9. Recover Worker
+10. View Failed Workers
+11. Exit
 ========================================
 Choose option:
 ```
 
-### Automated Demonstration Mode
-To run an automated end-to-end demonstration showing batch task distribution, real-time concurrency, and clean shutdown:
-```bash
-python main.py --demo
-```
-
-To run with a custom number of workers (e.g., 5 workers):
-```bash
-python main.py --workers 5
-```
+### 4. Run Automated Demonstrations:
+* **Phase 3 Fault Tolerance Demo:**
+  ```bash
+  python main.py --demo-failure
+  ```
+* **Algorithm Comparison Benchmark:**
+  ```bash
+  python main.py --compare
+  ```
+* **Phase 2 Concurrency Demo:**
+  ```bash
+  python main.py --demo
+  ```
 
 ---
 
-## 9. How to Run Tests
+## 11. How to Run Tests
 
 Run the complete test suite using Python's built-in `unittest` runner:
 
@@ -206,139 +296,50 @@ python -m unittest discover -s tests -v
 ```
 *(Or `.\venv\Scripts\python.exe -m unittest discover -s tests -v` on Windows)*
 
-All 18 tests will execute and verify task lifecycle transitions, exact Round Robin order, worker threads, and concurrent execution speedup.
+**All 47 tests pass cleanly:**
+* Task lifecycle, unique sequential IDs, state transitions.
+* Worker execution, workload calculation, and graceful stop.
+* Round Robin and Least Connections fault-tolerant selection.
+* Worker failure simulation and active task interruption.
+* Queued task draining and automatic re-routing.
+* Worker thread recovery without thread leaks.
+* Concurrency race-condition prevention under simultaneous submission and failure.
+* Full 30-task stress test verifying zero lost recoverable tasks and zero duplicate completions.
 
 ---
 
-## 10. Example Output
+## 12. Operating Systems Concepts Demonstrated
 
-### Submitting Batch Tasks (Option 2):
-```text
-Choose option: 2
-Number of tasks: 6
-Enter processing duration per task (seconds, default 2.0): 2.0
-
-Submitting tasks...
-T001 -> Worker-1
-T002 -> Worker-2
-T003 -> Worker-3
-T004 -> Worker-1
-T005 -> Worker-2
-T006 -> Worker-3
-
-[OK] Successfully submitted 6 tasks.
-```
-
-### Real-Time Logging Output:
-```text
-[14:28:16] Task T001 created
-[14:28:16] Task T001 assigned to Worker-1
-[14:28:16] Worker-1 started Task T001
-[14:28:16] Task T002 created
-[14:28:16] Task T002 assigned to Worker-2
-[14:28:16] Worker-2 started Task T002
-[14:28:16] Task T003 created
-[14:28:16] Task T003 assigned to Worker-3
-[14:28:16] Worker-3 started Task T003
-[14:28:16] Task T004 created
-[14:28:16] Task T004 assigned to Worker-1
-[14:28:16] Task T005 created
-[14:28:16] Task T005 assigned to Worker-2
-[14:28:16] Task T006 created
-[14:28:16] Task T006 assigned to Worker-3
-[14:28:18] Worker-1 completed Task T001
-[14:28:18] Worker-1 started Task T004
-[14:28:18] Worker-2 completed Task T002
-[14:28:18] Worker-2 started Task T005
-[14:28:18] Worker-3 completed Task T003
-[14:28:18] Worker-3 started Task T006
-```
-
-### Worker Status (Option 3):
-```text
-========================================
-WORKER STATUS
-========================================
-
-Worker-1
-Status: BUSY
-Current Task: T001
-Queue Size: 1
-Completed: 0
-
-Worker-2
-Status: BUSY
-Current Task: T002
-Queue Size: 1
-Completed: 0
-
-Worker-3
-Status: BUSY
-Current Task: T003
-Queue Size: 1
-Completed: 0
-========================================
-
-System Summary: 6 Submitted | 3 Running | 3 Queued | 0 Completed
-```
-
-### All Tasks Table (Option 5):
-```text
-============================================================================
-ID       NAME                 WORKER         STATUS         DURATION   EXEC TIME 
-----------------------------------------------------------------------------
-T001     Batch-Task-1         Worker-1       COMPLETED      2.0s       2.01s     
-T002     Batch-Task-2         Worker-2       COMPLETED      2.0s       2.01s     
-T003     Batch-Task-3         Worker-3       COMPLETED      2.0s       2.00s     
-T004     Batch-Task-4         Worker-1       COMPLETED      2.0s       2.01s     
-T005     Batch-Task-5         Worker-2       COMPLETED      2.0s       2.00s     
-T006     Batch-Task-6         Worker-3       COMPLETED      2.0s       2.01s     
-============================================================================
-```
+1. **Thread Lifecycle Management:**
+   - Explicit lifecycle states (`STARTED` -> `RUNNING` -> `FAILED` -> `RECOVERED` -> `RUNNING` -> `STOPPED`).
+   - Clean thread recreation without orphaned threads.
+2. **Mutual Exclusion & Critical Sections:**
+   - Synchronizes shared memory (`Worker._lock`, `LoadBalancer._lock`) using reentrant locks (`threading.RLock`).
+3. **Condition Synchronization & Signaling:**
+   - Uses `threading.Event` to interrupt thread sleep immediately upon failure without using unsafe OS signals.
+4. **Producer-Consumer Architecture:**
+   - Load balancer enqueues tasks; worker threads consume and process tasks asynchronously via thread-safe monitors (`queue.Queue`).
+5. **Static vs. Dynamic CPU/Task Scheduling:**
+   - Static cyclic allocation (Round Robin) vs. dynamic state-dependent allocation (Least Connections).
+6. **Fault Tolerance & Graceful Recovery:**
+   - Backpressure handling, failover, queue draining, task re-routing, and node recovery.
+7. **Empirical Benchmarking & Performance Metrics:**
+   - Direct measurement of throughput, latency, waiting time, and turnaround time.
 
 ---
 
-## 11. Operating Systems Concepts Demonstrated
+## 13. Limitations of Phase 3
 
-1. **Multithreading & Concurrency:**
-   - Multiple backend worker threads (`threading.Thread`) execute concurrently, utilizing OS thread scheduling to overlap task runtimes.
-2. **Producer-Consumer Pattern:**
-   - The load balancer acts as a producer, enqueueing tasks into thread-safe queues.
-   - Worker threads act as consumers, dequeueing and processing tasks asynchronously.
-3. **Thread-Safe Queuing:**
-   - Employs Python's monitor-based `queue.Queue` with internal condition variables and mutual exclusion to eliminate race conditions during task handover.
-4. **Task Scheduling (Round Robin):**
-   - Implements a classic OS scheduling algorithm that distributes workloads evenly and cyclically without starvation.
-5. **Thread Synchronization & Mutual Exclusion:**
-   - Mutex locks (`threading.Lock`) safeguard shared data structures (task status updates, scheduler index increment, completion counters) preventing state corruption.
-6. **Graceful Termination & Signaling:**
-   - Uses `threading.Event` and sentinel tokens (`None`) to signal worker threads to cleanly finish active workloads and terminate safely.
+* **Single-Machine Simulation:** Logical workers run as Python threads on one host machine rather than physical distributed servers over a network.
+* **Simulated Execution Duration:** Workloads use simulated execution duration (`time.sleep` / event wait) rather than external CPU-bound C libraries.
+* **CLI-Only Interface:** Interaction is terminal-based; web monitoring and charts are strictly deferred to Phase 4.
 
 ---
 
-## 12. Limitations of Phase 1
+## 14. Future Roadmap
 
-* **Static Round Robin Only:** Tasks are assigned in fixed cyclic order regardless of individual task execution times or current worker load.
-* **No Dynamic Load Awareness:** Does not factor in worker queue lengths (Least Connections is not implemented yet).
-* **No Worker Failure Handling:** Workers are assumed to remain healthy (worker crash detection and recovery are not implemented yet).
-* **CLI-Only Interface:** Interaction is terminal-based; web monitoring and graphical visualization are not included.
-
----
-
-## 13. Future Roadmap
-
-* **Phase 2 — Intelligent Load Balancing:**
-  - Least Connections scheduling algorithm.
-  - Dynamic load tracking and queue-depth awareness.
-  - Comparative performance evaluation between Round Robin and Least Connections.
-* **Phase 3 — Fault Tolerance & Synchronization:**
-  - Worker health checks and heartbeat mechanisms.
-  - Worker crash simulation and automatic recovery.
-  - Task reassignment upon worker failure.
-  - Explicit race condition demonstrations and synchronization benchmarks.
 * **Phase 4 — Monitoring & Web Dashboard:**
   - Flask web application backend.
   - Responsive web dashboard (HTML/CSS/JavaScript).
-  - Real-time charts showing throughput, latency, and worker utilization.
-  - Live side-by-side algorithm comparison.
-
+  - Real-time performance charts showing throughput, latency, and worker utilization.
+  - Interactive web UI controls for failure injection and recovery.
