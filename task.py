@@ -64,6 +64,7 @@ class Task:
         task_id: Unique task identifier (e.g., 'T001').
         name: Human-readable task name or description.
         duration: Simulated processing duration in seconds.
+        arrival_time: Epoch timestamp when task becomes available for scheduling.
         task_type: Classification of the task (e.g., 'CPU_TASK', 'IO_TASK').
         created_at: Epoch timestamp of task creation.
         started_at: Epoch timestamp when worker began processing.
@@ -76,6 +77,7 @@ class Task:
     task_id: str = field(default_factory=generate_task_id)
     name: str = "Default Task"
     duration: float = 1.0
+    arrival_time: float = field(default_factory=time.time)
     task_type: str = "CPU_TASK"
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Distributed Load Balancer Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <!-- Chart.js from CDN — no npm or build tools required -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ========================================================
+     HEADER
+     ======================================================== -->
+<header class="header">
+    <div class="header-inner">
+        <div class="header-title">
+            <h1>Distributed Load Balancer</h1>
+            <span class="header-subtitle">Single-machine thread simulator &nbsp;|&nbsp; OS Mini-Project</span>
+        </div>
+        <div class="header-meta">
+            <span class="algo-label">Algorithm:</span>
+            <span id="current-algorithm" class="algo-value">Round Robin</span>
+            <span id="uptime-display" class="uptime-value">Uptime: 0s</span>
+        </div>
+    </div>
+</header>
+
+<!-- Status message bar (hidden until needed) -->
+<div id="status-bar" class="status-bar hidden"></div>
+
+<main class="main-grid">
+
+    <!-- ====================================================
+         SECTION 1: STAT CARDS
+         ==================================================== -->
+    <section class="section full-width">
+        <div class="stat-cards">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-workers">3</div>
+                <div class="stat-label">Total Workers</div>
+            </div>
+            <div class="stat-card stat-green">
+                <div class="stat-value" id="stat-active">3</div>
+                <div class="stat-label">Active Workers</div>
+            </div>
+            <div class="stat-card stat-red">
+                <div class="stat-value" id="stat-failed-workers">0</div>
+                <div class="stat-label">Failed Workers</div>
+            </div>
+            <div class="stat-card stat-blue">
+                <div class="stat-value" id="stat-running">0</div>
+                <div class="stat-label">Running Tasks</div>
+            </div>
+            <div class="stat-card stat-purple">
+                <div class="stat-value" id="stat-completed">0</div>
+                <div class="stat-label">Completed Tasks</div>
+            </div>
+            <div class="stat-card stat-orange">
+                <div class="stat-value" id="stat-throughput">0.00</div>
+                <div class="stat-label">Throughput (tasks/s)</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ====================================================
+         SECTION 2: CONTROLS
+         ==================================================== -->
+    <section class="section full-width">
+        <div class="controls-row">
+
+            <!-- Algorithm selector -->
+            <div class="control-group">
+                <h3 class="control-title">Scheduling Algorithm</h3>
+                <div class="control-inner">
+                    <select id="algo-select" onchange="changeAlgorithm(this.value)">
+                        <option value="round_robin">Round Robin</option>
+                        <option value="least_connections">Least Connections</option>
+                    </select>
+                    <span class="help-text">Changes take effect for future tasks</span>
+                </div>
+            </div>
+
+            <!-- Single task submit -->
+            <div class="control-group">
+                <h3 class="control-title">Submit Task</h3>
+                <div class="control-inner">
+                    <input
+                        type="text"
+                        id="task-name"
+                        placeholder="Task name (optional)"
+                        value="Web Task"
+                    />
+                    <input
+                        type="number"
+                        id="task-duration"
+                        placeholder="Duration (s)"
+                        min="0.05"
+                        max="30"
+                        step="0.1"
+                        value="8"
+                    />
+                    <input
+                        type="number"
+                        id="task-arrival"
+                        placeholder="Arrival (s)"
+                        min="0"
+                        max="60"
+                        step="0.5"
+                        value="0"
+                    />
+                    <button class="btn btn-primary" onclick="submitTask()">Submit Task</button>
+                </div>
+            </div>
+
+            <!-- Batch submit -->
+            <div class="control-group">
+                <h3 class="control-title">Batch Submit</h3>
+                <div class="control-inner">
+                    <input
+                        type="number"
+                        id="batch-count"
+                        placeholder="Count"
+                        min="1"
+                        max="20"
+                        step="1"
+                        value="5"
+                    />
+                    <input
+                        type="number"
+                        id="batch-duration"
+                        placeholder="Duration (s)"
+                        min="0.05"
+                        max="30"
+                        step="0.1"
+                        value="1"
+                    />
+                    <button class="btn btn-secondary" onclick="submitBatch()">Submit Batch</button>
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- ====================================================
+         SECTION 3: WORKER MONITOR
+         ==================================================== -->
+    <section class="section full-width">
+        <h2 class="section-title">Worker Monitor</h2>
+        <div id="worker-cards" class="worker-grid">
+            <!-- Populated by JavaScript -->
+            <p class="loading-text">Loading workers...</p>
+        </div>
+    </section>
+
+    <!-- ====================================================
+         SECTION 4: METRICS PANEL
+         ==================================================== -->
+    <section class="section half-width">
+        <h2 class="section-title">Performance Metrics</h2>
+        <table class="metrics-table">
+            <tbody>
+                <tr>
+                    <td>Avg Execution Time</td>
+                    <td id="metric-avg-exec">0.00 s</td>
+                </tr>
+                <tr>
+                    <td>Avg Waiting Time</td>
+                    <td id="metric-avg-wait">0.00 s</td>
+                </tr>
+                <tr>
+                    <td>Total Execution Time</td>
+                    <td id="metric-total-exec">0.00 s</td>
+                </tr>
+                <tr>
+                    <td>Tasks Queued</td>
+                    <td id="metric-queued">0</td>
+                </tr>
+                <tr>
+                    <td>Tasks Interrupted</td>
+                    <td id="metric-interrupted">0</td>
+                </tr>
+                <tr>
+                    <td>Tasks Re-routed</td>
+                    <td id="metric-rerouted">0</td>
+                </tr>
+                <tr>
+                    <td>Worker Failures</td>
+                    <td id="metric-w-failures">0</td>
+                </tr>
+                <tr>
+                    <td>Worker Recoveries</td>
+                    <td id="metric-w-recoveries">0</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ====================================================
+         SECTION 5: CHARTS
+         ==================================================== -->
+    <section class="section half-width">
+        <h2 class="section-title">Task Status Distribution</h2>
+        <div class="chart-container chart-small">
+            <canvas id="chart-task-status"></canvas>
+        </div>
+    </section>
+
+    <section class="section half-width">
+        <h2 class="section-title">Worker Workload</h2>
+        <div class="chart-container chart-small">
+            <canvas id="chart-workload"></canvas>
+        </div>
+    </section>
+
+    <section class="section half-width">
+        <h2 class="section-title">Throughput History (tasks/s)</h2>
+        <div class="chart-container chart-small">
+            <canvas id="chart-throughput"></canvas>
+        </div>
+    </section>
+
+    <!-- ====================================================
+         SECTION 6: TASK TABLE
+         ==================================================== -->
+    <section class="section full-width">
+        <h2 class="section-title">
+            Task Monitor
+            <span class="task-count" id="task-count-value">0 tasks</span>
+        </h2>
+        <div class="table-scroll-wrapper">
+            <table class="task-table" id="task-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Status</th>
+                        <th>Worker</th>
+                        <th>Duration (s)</th>
+                        <th>Arrival (s)</th>
+                        <th>Exec Time (s)</th>
+                        <th>Wait Time (s)</th>
+                        <th>Algorithm</th>
+                        <th>Re-routed</th>
+                    </tr>
+                </thead>
+                <tbody id="task-tbody">
+                    <tr>
+                        <td colspan="10" class="empty-row">No tasks submitted yet.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- ====================================================
+         SECTION 7: EXECUTION TIMELINE
+         ==================================================== -->
+    <section class="section full-width">
+        <h2 class="section-title">Execution Timeline</h2>
+        <div class="timeline-panel">
+            <div class="timeline-container" id="timeline-container">
+                <p class="loading-text">Submit tasks to see the execution timeline.</p>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<footer class="footer">
+    <p>
+        Distributed Load Balancer Simulator &mdash; OS Mini-Project (Phase 4) &mdash;
+        Charts by <a href="https://www.chartjs.org/" target="_blank">Chart.js</a>
+    </p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
+

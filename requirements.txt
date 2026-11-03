@@ -1,5 +1,5 @@
-# Python Functional Load Balancer — Phase 1
-# Phase 1 relies exclusively on the Python standard library:
+# Python Functional Load Balancer
+# Phases 1-3 rely exclusively on the Python standard library:
 #   - threading
 #   - queue
 #   - time
@@ -10,6 +10,8 @@
 #   - logging
 #   - unittest
 #
-# No external dependencies or third-party packages are required for Phase 1.
-# Flask, web servers, and third-party UI libraries are strictly deferred to Phase 4.
-
+# Phase 4 (Web Dashboard) adds:
+flask>=2.3.0
+#
+# Chart.js is loaded from CDN at runtime (no npm / build step required):
+#   https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js

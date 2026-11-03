@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Distributed Load Balancer Simulator</title>
+    <link rel="stylesheet" href="/static/main.css" />
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+    <div class="header-inner">
+        <div class="logo">
+            <span class="logo-dot"></span>
+            <span class="logo-text">Distributed Load Balancer Simulator</span>
+        </div>
+        <nav class="nav">
+            <a href="#overview" class="nav-link">Overview</a>
+            <a href="/simulator" class="nav-link">Single-Node Simulation</a>
+            <a href="#algorithms" class="nav-link">Algorithm Comparison</a>
+            <a href="#architecture" class="nav-link">Architecture</a>
+        </nav>
+        <a href="/simulator" class="btn btn-primary">Launch Simulator →</a>
+    </div>
+</header>
+
+<!-- HERO SECTION -->
+<section id="overview" class="hero">
+    <div class="hero-inner">
+        <h2 class="hero-subtitle">OPERATING SYSTEMS TASK DISTRIBUTION & WORKER LOAD BALANCING</h2>
+        <h1 class="hero-title">Distributed Task Scheduling</h1>
+        <p class="hero-description">
+            A functional single-machine simulation of distributed task scheduling across concurrent worker threads
+            with independent queues, fault-tolerant load balancing, and real-time performance monitoring.
+        </p>
+        <div class="hero-cta">
+            <a href="/simulator" class="btn btn-primary btn-large">Launch Simulator Dashboard</a>
+            <a href="#algorithms" class="btn btn-secondary btn-large">Compare RR vs Least Connections</a>
+            <a href="#architecture" class="btn btn-secondary btn-large">Architecture Overview</a>
+        </div>
+    </div>
+</section>
+
+<!-- ALGORITHMS SECTION -->
+<section id="algorithms" class="section">
+    <div class="section-inner">
+        <h2 class="section-subtitle">SUPPORTED LOAD BALANCERS</h2>
+        <h3 class="section-title">Scheduling Algorithms & Dispatch Heuristics</h3>
+        <div class="algorithm-cards">
+            <div class="algorithm-card">
+                <div class="algorithm-card-header">
+                    <span class="algorithm-number">01</span>
+                    <span class="algorithm-type">SEQUENTIAL</span>
+                </div>
+                <h3 class="algorithm-title">Round Robin (RR)</h3>
+                <p class="algorithm-description">
+                    Sequentially assigns tasks across available workers in a fixed cyclic order. Each worker receives tasks in turn,
+                    ensuring fair distribution of workload across all active workers regardless of their current state.
+                </p>
+                <ul class="algorithm-features">
+                    <li>Fair cyclic distribution across workers</li>
+                    <li>No workload state consideration</li>
+                    <li>Predictable task assignment pattern</li>
+                </ul>
+                <a href="/simulator?algorithm=round_robin" class="btn btn-primary">Simulate Round Robin →</a>
+            </div>
+            <div class="algorithm-card">
+                <div class="algorithm-card-header">
+                    <span class="algorithm-number">02</span>
+                    <span class="algorithm-type">WORKLOAD-AWARE</span>
+                </div>
+                <h3 class="algorithm-title">Least Connections (LC)</h3>
+                <p class="algorithm-description">
+                    Selects the available worker with the lowest current workload at each scheduling decision.
+                    Workload is calculated as (executing task count) + (queued task count), minimizing average waiting time.
+                </p>
+                <ul class="algorithm-features">
+                    <li>Minimizes average waiting time</li>
+                    <li>Dynamic workload-based selection</li>
+                    <li>Adapts to uneven task durations</li>
+                </ul>
+                <a href="/simulator?algorithm=least_connections" class="btn btn-primary">Simulate Least Connections →</a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ARCHITECTURE SECTION -->
+<section id="architecture" class="section section-gray">
+    <div class="section-inner">
+        <h2 class="section-title">System Architecture</h2>
+        <div class="architecture-diagram">
+            <div class="arch-box arch-center">
+                <div class="arch-label">LOAD BALANCER</div>
+                <div class="arch-arrow-down"></div>
+                <div class="arch-label">SCHEDULER</div>
+                <div class="arch-arrow-down"></div>
+            </div>
+            <div class="arch-workers">
+                <div class="arch-worker">
+                    <div class="arch-label">WORKER 1</div>
+                    <div class="arch-label-small">THREAD</div>
+                    <div class="arch-arrow-down"></div>
+                    <div class="arch-label-small">QUEUE</div>
+                    <div class="arch-arrow-down"></div>
+                    <div class="arch-label-small">TASKS</div>
+                </div>
+                <div class="arch-worker">
+                    <div class="arch-label">WORKER 2</div>
+                    <div class="arch-label-small">THREAD</div>
+                    <div class="arch-arrow-down"></div>
+                    <div class="arch-label-small">QUEUE</div>
+                    <div class="arch-arrow-down"></div>
+                    <div class="arch-label-small">TASKS</div>
+                </div>
+                <div class="arch-worker">
+                    <div class="arch-label">WORKER 3</div>
+                    <div class="arch-label-small">THREAD</div>
+                    <div class="arch-arrow-down"></div>
+                    <div class="arch-label-small">QUEUE</div>
+                    <div class="arch-arrow-down"></div>
+                    <div class="arch-label-small">TASKS</div>
+                </div>
+            </div>
+        </div>
+        <div class="architecture-note">
+            <p>
+                <strong>Key Concepts:</strong> Each worker is a logical entity with its own execution thread
+                and independent task queue. This is a single-machine simulation of distributed architecture,
+                not a multi-machine cluster.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- CTA BANNER -->
+<section class="cta-banner">
+    <div class="cta-inner">
+        <h2 class="cta-title">Ready to Simulate and Benchmark?</h2>
+        <p class="cta-description">
+            Open the interactive dashboard to customize workloads, select scheduling algorithms,
+            inspect worker states and queue contents, or simulate worker failures and recovery.
+        </p>
+        <a href="/simulator" class="btn btn-white">Open Simulator Dashboard →</a>
+    </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer">
+    <div class="footer-inner">
+        <div class="footer-brand">
+            <span class="footer-title">Distributed Load Balancer Simulator</span>
+            <span class="footer-subtitle">Operating Systems Task Distribution & Multi-Worker Load Balancing</span>
+        </div>
+        <nav class="footer-nav">
+            <a href="/simulator" class="footer-link">Dashboard</a>
+            <a href="#algorithms" class="footer-link">Comparison View</a>
+            <a href="#architecture" class="footer-link">Architecture</a>
+        </nav>
+    </div>
+</footer>
+
+</body>
+</html>

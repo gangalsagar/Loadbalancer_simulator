@@ -215,9 +215,12 @@ class LoadBalancer:
         name: str,
         duration: float,
         task_type: str = "CPU_TASK",
+        arrival_time: Optional[float] = None,
     ) -> Task:
         """Helper to create and submit a task in one call."""
-        task = Task(name=name, duration=duration, task_type=task_type)
+        if arrival_time is None:
+            arrival_time = time.time()
+        task = Task(name=name, duration=duration, task_type=task_type, arrival_time=arrival_time)
         return self.submit_task(task)
 
     def _re_route_task(self, task: Task) -> None:
@@ -363,6 +366,10 @@ class LoadBalancer:
     def get_worker_status(self) -> List[dict]:
         """Return status dictionaries for all registered workers."""
         return [w.get_status_dict() for w in self.workers]
+
+    def get_worker_queues(self) -> dict:
+        """Return queue snapshots for all workers."""
+        return {w.worker_id: w.get_queue_snapshot() for w in self.workers}
 
     def get_metrics(self) -> dict:
         """

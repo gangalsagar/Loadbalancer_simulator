@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simulator - Distributed Load Balancer</title>
+    <link rel="stylesheet" href="/static/main.css" />
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+    <div class="header-inner">
+        <div class="logo">
+            <span class="logo-dot"></span>
+            <span class="logo-text">Distributed Load Balancer Simulator</span>
+        </div>
+        <nav class="nav">
+            <a href="/" class="nav-link">Overview</a>
+            <a href="/simulator" class="nav-link nav-active">Single-Node Simulation</a>
+            <a href="/#algorithms" class="nav-link">Algorithm Comparison</a>
+            <a href="/#architecture" class="nav-link">Architecture</a>
+        </nav>
+        <a href="/" class="btn btn-secondary">Back to Overview</a>
+    </div>
+</header>
+
+<!-- MAIN LAYOUT -->
+<div class="simulator-layout">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <div class="sidebar-section">
+            <h3 class="sidebar-title">Navigation</h3>
+            <nav class="sidebar-nav">
+                <a href="#simulation" class="sidebar-link sidebar-active">Individual Simulation</a>
+                <a href="/#algorithms" class="sidebar-link">Algorithm Comparison</a>
+                <a href="/#architecture" class="sidebar-link">Architecture</a>
+            </nav>
+        </div>
+
+        <div class="sidebar-section">
+            <h3 class="sidebar-title">Controls</h3>
+            <div class="sidebar-control">
+                <label class="sidebar-label">Scheduling Algorithm</label>
+                <select id="algo-select" class="sidebar-select" onchange="changeAlgorithm(this.value)">
+                    <option value="round_robin">Round Robin (RR)</option>
+                    <option value="least_connections">Least Connections (LC)</option>
+                </select>
+            </div>
+            <div class="sidebar-control">
+                <label class="sidebar-label">Simulation Status</label>
+                <div id="sim-status" class="sidebar-status status-ready">READY</div>
+            </div>
+            <div class="sidebar-actions">
+                <button id="btn-run-simulation" class="btn btn-primary btn-block" onclick="runSimulation()">Run Simulation</button>
+                <button class="btn btn-secondary btn-block" onclick="loadSampleTasks()">Load Sample</button>
+                <button class="btn btn-secondary btn-block" onclick="resetSimulation()">Reset</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="simulator-main">
+
+        <!-- ALGORITHM INFO -->
+        <div class="algorithm-info">
+            <h3 id="algo-info-title" class="algo-info-title">Round Robin (RR)</h3>
+            <p id="algo-info-desc" class="algo-info-desc">
+                Sequentially assigns tasks across available workers in a fixed cyclic order.
+            </p>
+        </div>
+
+        <!-- WORKLOAD CONFIGURATION -->
+        <section id="simulation" class="section">
+            <h2 class="section-title">WORKLOAD CONFIGURATION</h2>
+
+            <div class="config-toolbar">
+                <span class="config-preset">Preset: Default Sample (5 Tasks)</span>
+                <button class="btn btn-secondary btn-sm" onclick="loadSampleTasks()">+ Add Task</button>
+                <button class="btn btn-secondary btn-sm" onclick="resetSimulation()">Reset</button>
+            </div>
+
+            <div class="task-entry-panel">
+                <div class="task-entry-form">
+                    <div class="form-field">
+                        <label class="form-label">Task Name</label>
+                        <input type="text" id="task-name" class="form-input" placeholder="e.g., Database Query" />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label">Duration (seconds)</label>
+                        <input type="number" id="task-duration" class="form-input" placeholder="8" min="0.05" max="30" step="0.1" value="8" />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label">Arrival Time (seconds)</label>
+                        <input type="number" id="task-arrival" class="form-input" placeholder="0" min="0" max="60" step="0.5" value="0" />
+                    </div>
+                    <button class="btn btn-primary" onclick="addPreparedTask()">Add Task</button>
+                </div>
+            </div>
+
+            <div class="prepared-tasks-panel">
+                <div class="table-scroll-wrapper">
+                    <table class="task-table" id="prepared-table">
+                        <thead>
+                            <tr>
+                                <th>Task ID</th>
+                                <th>Task Name</th>
+                                <th>Duration (s)</th>
+                                <th>Arrival (s)</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="prepared-tbody">
+                            <tr>
+                                <td colspan="5" class="empty-row">No tasks prepared yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- LIVE SIMULATION (hidden initially) -->
+        <section id="live-simulation" class="section" style="display: none;">
+            <h2 class="section-title">LIVE SIMULATION</h2>
+
+            <!-- PERFORMANCE SUMMARY -->
+            <div class="performance-summary">
+                <div class="perf-item">
+                    <span class="perf-label">TASKS SCHEDULED</span>
+                    <span class="perf-value" id="perf-total">0</span>
+                </div>
+                <div class="perf-item">
+                    <span class="perf-label">AVERAGE WAITING TIME</span>
+                    <span class="perf-value" id="perf-avg-wait">0.00 units</span>
+                </div>
+                <div class="perf-item">
+                    <span class="perf-label">AVERAGE EXECUTION TIME</span>
+                    <span class="perf-value" id="perf-avg-exec">0.00 units</span>
+                </div>
+                <div class="perf-item">
+                    <span class="perf-label">TOTAL EXECUTION TIME</span>
+                    <span class="perf-value" id="perf-total-exec">0.00 units</span>
+                </div>
+            </div>
+
+            <!-- WORKER VISUALIZATION -->
+            <h3 class="section-subtitle-small">WORKER STATES</h3>
+            <div class="workers-grid" id="workers-grid">
+                <!-- Populated by JavaScript -->
+            </div>
+
+            <!-- EXECUTION TIMELINE -->
+            <h3 class="section-subtitle-small">EXECUTION TIMELINE</h3>
+            <div class="timeline-panel">
+                <div class="timeline-container" id="timeline-container">
+                    <p class="empty-text">Run a simulation to see the execution timeline.</p>
+                </div>
+            </div>
+
+            <!-- TASK MONITOR -->
+            <h3 class="section-subtitle-small">TASK RESULTS & COMPARISON</h3>
+            <div class="task-monitor-panel">
+                <div class="table-scroll-wrapper">
+                    <table class="task-table" id="task-table">
+                        <thead>
+                            <tr>
+                                <th>Task ID</th>
+                                <th>Task Name</th>
+                                <th>Duration</th>
+                                <th>Arrival</th>
+                                <th>Worker</th>
+                                <th>Status</th>
+                                <th>Waiting Time</th>
+                                <th>Execution Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="task-tbody">
+                            <tr>
+                                <td colspan="8" class="empty-row">No tasks submitted yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- SIMULATION COMPLETE -->
+            <div id="simulation-complete" class="simulation-complete" style="display: none;">
+                <h3 class="complete-title">SIMULATION COMPLETE</h3>
+                <button class="btn btn-primary btn-large" onclick="resetSimulation()">Run New Simulation</button>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<script src="/static/simulator.js"></script>
+</body>
+</html>

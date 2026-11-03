@@ -15,7 +15,7 @@ Unlike UI simulations or static mocks, this system actually spawns independent b
 > - **PHASE 2 (Intelligent Load Balancing)**
 > - **PHASE 3 (Fault Tolerance & Synchronization)**
 >
-> Phase 4 (Flask Web Dashboard, Charts) is strictly deferred to the next milestone.
+> Phase 4 (Flask Web Dashboard, Charts) is **now complete** — see Section 15 below.
 >
 > **Logical/Virtual Worker Clarification:** The backend workers are logical/virtual workers implemented as Python threads (`threading.Thread`) running concurrently on a single physical machine. This simulates distributed server nodes within a shared-memory environment.
 
@@ -199,7 +199,7 @@ This project demonstrates rigorous OS synchronization:
   - `argparse` (CLI parsing)
   - `logging` (Timestamped event logs)
   - `unittest` (Automated test suite)
-* **External Dependencies:** **None** (100% Python standard library).
+* **External Dependencies:** `flask>=2.3.0` (Phase 4 only). All Phase 1–3 logic uses only the Python standard library.
 
 ---
 
@@ -207,14 +207,20 @@ This project demonstrates rigorous OS synchronization:
 
 ```text
 loadbalancer/
+├── app.py                   # Phase 4: Flask API + dashboard entry point
 ├── main.py                  # CLI entry point, interactive menu (1-11), and demo runners
 ├── load_balancer.py         # Core LoadBalancer coordinator, failure simulation, and metrics
 ├── server.py                # Worker thread, failure handling, queue draining, and recovery
 ├── scheduler.py             # Fault-tolerant Round Robin, Least Connections, and factory
 ├── comparison.py            # Controlled head-to-head algorithm comparison benchmark
 ├── task.py                  # Task model, lifecycle states (INTERRUPTED), and ID generator
-├── requirements.txt         # Dependency documentation (standard library only)
+├── requirements.txt         # Dependency documentation (flask for Phase 4)
 ├── README.md                # Project documentation and Operating Systems guide
+├── templates/
+│   └── index.html           # Phase 4: Single-page monitoring dashboard
+├── static/
+│   ├── style.css            # Phase 4: Dark monitoring theme (pure CSS)
+│   └── app.js               # Phase 4: Vanilla JS polling, charts, user actions
 └── tests/
     ├── __init__.py          # Test package indicator
     ├── test_task.py         # Unit tests for task creation, state, and ID generation
@@ -223,7 +229,8 @@ loadbalancer/
     ├── test_load_balancer.py# Unit tests for submission, dynamic switching, and metrics
     ├── test_concurrency.py  # Concurrency benchmark and execution window overlap test
     ├── test_comparison.py   # Unit tests for comparison benchmark runner and formatter
-    └── test_fault_tolerance.py # Unit, integration, concurrency, and stress tests for Phase 3
+    ├── test_fault_tolerance.py # Unit, integration, concurrency, and stress tests for Phase 3
+    └── test_web.py          # Phase 4: 28 Flask test-client API tests
 ```
 
 ---
@@ -296,7 +303,7 @@ python -m unittest discover -s tests -v
 ```
 *(Or `.\venv\Scripts\python.exe -m unittest discover -s tests -v` on Windows)*
 
-**All 47 tests pass cleanly:**
+**All 75 tests pass cleanly** (47 Phase 1–3 + 28 Phase 4 web tests):
 * Task lifecycle, unique sequential IDs, state transitions.
 * Worker execution, workload calculation, and graceful stop.
 * Round Robin and Least Connections fault-tolerant selection.
@@ -333,6 +340,99 @@ python -m unittest discover -s tests -v
 * **Single-Machine Simulation:** Logical workers run as Python threads on one host machine rather than physical distributed servers over a network.
 * **Simulated Execution Duration:** Workloads use simulated execution duration (`time.sleep` / event wait) rather than external CPU-bound C libraries.
 * **CLI-Only Interface:** Interaction is terminal-based; web monitoring and charts are strictly deferred to Phase 4.
+
+* **External Dependencies:** `flask>=2.3.0` (Phase 4 only). All Phase 1-3 logic is 100% Python standard library.
+
+---
+
+## 15. Phase 4: Web Dashboard &amp; Real-Time Monitoring
+
+Phase 4 adds a browser-based monitoring and control dashboard **on top of** the existing functional backend. The Flask layer is a thin HTTP adapter only — all load balancing logic remains in the original Python modules.
+
+### Stack
+
+| Layer | Technology |
+|---|---|
+| Backend API | Python + Flask |
+| Frontend | HTML + CSS + Vanilla JavaScript |
+| Charts | Chart.js 4.x (via CDN — no npm) |
+| Transport | REST over HTTP / JSON |
+
+### Install Flask
+
+```powershell
+.\venv\Scripts\pip.exe install flask
+```
+
+### Start the Dashboard
+
+```powershell
+.\venv\Scripts\python.exe app.py
+```
+
+Then open **http://127.0.0.1:5000** in your browser.
+
+### Project Structure (Phase 4 additions)
+
+```text
+loadbalancer/
+├── app.py               # Flask application — REST API + HTML page serve
+├── templates/
+│   └── index.html       # Single-page dashboard (HTML)
+├── static/
+│   ├── style.css        # Dark monitoring theme (pure CSS)
+│   └── app.js           # Vanilla JS: polling, charts, user actions
+└── tests/
+    └── test_web.py      # 28 Flask test-client tests
+```
+
+### REST API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/` | Serve the dashboard HTML |
+| GET | `/api/status` | System overview (stat cards) |
+| GET | `/api/workers` | All worker status dicts |
+| GET | `/api/workers/failed` | Workers in FAILED state |
+| POST | `/api/workers/<id>/fail` | Simulate worker failure |
+| POST | `/api/workers/<id>/recover` | Recover a failed worker |
+| GET | `/api/tasks` | All submitted tasks (newest first) |
+| POST | `/api/tasks` | Submit a single task |
+| POST | `/api/tasks/batch` | Submit N tasks at once |
+| GET | `/api/metrics` | Full real-time metrics |
+| POST | `/api/algorithm` | Switch scheduling algorithm |
+
+### Dashboard Features
+
+1. **Header stat cards** — Total/Active/Failed workers, Running tasks, Completed tasks, Throughput
+2. **Algorithm selector** — Switch between Round Robin and Least Connections live
+3. **Task submit form** — Single task with custom duration and name
+4. **Batch submit form** — Submit 1–20 tasks at once
+5. **Worker monitor** — Per-worker cards showing status badge, workload, queue size, current task, failure/recovery counts, and Fail/Recover action buttons
+6. **Performance metrics panel** — Avg exec time, avg wait time, total exec time, re-routed count, failure/recovery counts
+7. **Task Status Distribution** — Live-updating doughnut chart
+8. **Worker Workload** — Live bar chart coloured by worker state
+9. **Throughput History** — Line chart showing last 30 readings
+10. **Task Monitor table** — Scrollable table of all tasks with status pills and re-routed tag
+
+### Demonstration Workflow
+
+1. Open http://127.0.0.1:5000
+2. Observe 3 workers showing IDLE status
+3. Submit a single task (duration = 2 s) — watch it appear in the task table as RUNNING then COMPLETED
+4. Submit a batch of 6 tasks — observe Round Robin distribution (2 tasks per worker)
+5. Switch algorithm to **Least Connections** — submit another batch and observe workload-aware distribution
+6. Click **Fail** on Worker-2 while tasks are running — observe Worker-2 turns FAILED, queued tasks re-route to Workers 1 and 3
+7. Click **Recover** on Worker-2 — it returns to IDLE and accepts new tasks again
+8. Observe the Throughput History chart accumulate data over time
+9. Check the Task Status Distribution doughnut updates as tasks complete
+
+### Limitations (Phase 4)
+
+* **Single-machine simulation:** Workers are Python threads, not real remote servers.
+* **No persistence:** All state is in-memory; restarting the server resets all tasks and metrics.
+* **No authentication:** Dashboard is intended for local/development use only (bound to 127.0.0.1).
+* **No WebSockets:** Dashboard uses HTTP polling (1.5 s interval) rather than push notifications.
 
 ---
 

@@ -291,6 +291,35 @@ class Worker:
                 and self.status not in (WorkerStatus.STOPPED, WorkerStatus.FAILED)
             )
 
+    def get_queue_snapshot(self) -> List[dict]:
+        """
+        Return a thread-safe snapshot of queued tasks.
+
+        Returns:
+            List of dictionaries containing task_id, name, and duration for each queued task.
+        """
+        with self._lock:
+            snapshot = []
+            temp_queue = []
+            # Drain queue temporarily to read all tasks
+            while True:
+                try:
+                    task = self.task_queue.get_nowait()
+                    if task is not None:
+                        snapshot.append({
+                            "task_id": task.task_id,
+                            "name": task.name,
+                            "duration": task.duration,
+                        })
+                        temp_queue.append(task)
+                    self.task_queue.task_done()
+                except queue.Empty:
+                    break
+            # Put tasks back in the same order
+            for task in temp_queue:
+                self.task_queue.put(task)
+            return snapshot
+
     def get_status_dict(self) -> dict:
         """Return a thread-safe snapshot of worker status."""
         with self._lock:
@@ -302,6 +331,19 @@ class Worker:
                 if self.completed_task_count > 0
                 else 0.0
             )
+            # Thread state representation
+            thread_alive = self._thread is not None and self._thread.is_alive()
+            if self.status == WorkerStatus.FAILED:
+                thread_state = "FAILED"
+            elif self.status == WorkerStatus.STOPPED:
+                thread_state = "STOPPED"
+            elif self.current_task is not None:
+                thread_state = "RUNNING"
+            elif queue_size > 0:
+                thread_state = "WAITING"
+            else:
+                thread_state = "IDLE"
+
             return {
                 "worker_id": self.worker_id,
                 "status": self.status.value,
@@ -318,6 +360,8 @@ class Worker:
                 "available": self.is_available,
                 "total_execution_time": self.total_execution_time,
                 "avg_execution_time": avg_exec,
+                "thread_alive": thread_alive,
+                "thread_state": thread_state,
             }
 
     def __repr__(self) -> str:
