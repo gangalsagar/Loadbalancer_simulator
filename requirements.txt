@@ -1,0 +1,15 @@
+# Python Functional Load Balancer — Phase 1
+# Phase 1 relies exclusively on the Python standard library:
+#   - threading
+#   - queue
+#   - time
+#   - dataclasses
+#   - typing
+#   - enum
+#   - argparse
+#   - logging
+#   - unittest
+#
+# No external dependencies or third-party packages are required for Phase 1.
+# Flask, web servers, and third-party UI libraries are strictly deferred to Phase 4.
+
